@@ -1,0 +1,67 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ge-ehr"
+version = "1.0.0"
+description = "GE-EHR for monogenic diabetes: a Genomic-Enhanced EHR with reclassification-aware re-evaluation (research prototype, synthetic data only)"
+readme = "README.md"
+requires-python = ">=3.13"
+classifiers = [
+    "Private :: Do Not Upload",
+    "Programming Language :: Python :: 3.13",
+    "Framework :: Flask",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+dependencies = [
+    "Flask==3.1.3",
+    "Flask-SQLAlchemy==3.1.1",
+    "SQLAlchemy==2.1.5",
+    "Flask-Login==0.6.3",
+    "Flask-WTF==1.3.0",
+    "WTForms==3.2.2",
+    "Flask-Migrate==4.1.0",
+    "cyvcf2==0.34.0",
+    "fhir.resources==8.3.0",
+    "gunicorn==26.2.0",
+    "psycopg2-binary==2.9.13",
+    "python-dotenv==1.2.4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.1.1",
+    "pytest-cov==7.1.0",
+    "playwright==1.64.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["ge_ehr*", "evaluation*"]
+
+[tool.setuptools.package-data]
+ge_ehr = ["templates/**/*", "static/**/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "slow: long-running tests (large cohorts, real ClinVar files); deselect with '-m \"not slow\"'",
+]
+# SQLAlchemy warnings (cartesian products, relationship conflicts, ...) indicate real bugs.
+filterwarnings = [
+    "error::sqlalchemy.exc.SAWarning",
+]
+
+[tool.coverage.run]
+source = ["ge_ehr"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]
