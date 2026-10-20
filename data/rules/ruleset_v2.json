@@ -1,0 +1,118 @@
+{
+  "rule_set": "GE-EHR monogenic diabetes rules",
+  "label": "v2 (2026)",
+  "rules": [
+    {
+      "code": "D1",
+      "version": 1,
+      "kind": "treatment",
+      "title": "GCK diabetes on glucose-lowering medication",
+      "genetic": {
+        "genes": ["GCK"],
+        "classes": ["P", "LP"],
+        "mechanism": null
+      },
+      "clinical": {
+        "any_of_drug_classes": ["insulin", "metformin", "sulfonylurea", "other"],
+        "none_of_drug_classes": null,
+        "max_age_at_diagnosis_months": null
+      },
+      "severity": "medium",
+      "recommendation": "Medication usually not required outside pregnancy; review whether glucose-lowering treatment can be stopped.",
+      "source": "Kang E, Chung LY, Kim YJ, Oh KE, Rhie YJ. Monogenic diabetes mellitus and clinical implications of genetic diagnosis. Precis Future Med. 2021;5(3):106-116. doi:10.23838/pfm.2021.00100; De Sousa SMC, Phan JMN, Wells A, Wu KHC, Scott HS. Improving detection of monogenic diabetes through reanalysis of GCK variants of uncertain significance. Acta Diabetol. 2025. doi:10.1007/s00592-025-02449-8",
+      "change_note": "Initial version"
+    },
+    {
+      "code": "D2",
+      "version": 1,
+      "kind": "treatment",
+      "title": "HNF1A diabetes on insulin or metformin",
+      "genetic": {
+        "genes": ["HNF1A"],
+        "classes": ["P", "LP"],
+        "mechanism": null
+      },
+      "clinical": {
+        "any_of_drug_classes": ["insulin", "metformin"],
+        "none_of_drug_classes": ["sulfonylurea"],
+        "max_age_at_diagnosis_months": null
+      },
+      "severity": "high",
+      "recommendation": "Consider low-dose sulfonylurea as first-line treatment.",
+      "source": "Kang E, Chung LY, Kim YJ, Oh KE, Rhie YJ. Monogenic diabetes mellitus and clinical implications of genetic diagnosis. Precis Future Med. 2021;5(3):106-116. doi:10.23838/pfm.2021.00100; Naylor RN, Patel KA, Kettunen JLT, et al. Precision treatment of beta-cell monogenic diabetes: a systematic review (ADA/EASD Precision Medicine in Diabetes Initiative). Commun Med. 2024;4:145",
+      "change_note": "Initial version"
+    },
+    {
+      "code": "D3",
+      "version": 1,
+      "kind": "treatment",
+      "title": "HNF4A diabetes on insulin or metformin",
+      "genetic": {
+        "genes": ["HNF4A"],
+        "classes": ["P", "LP"],
+        "mechanism": null
+      },
+      "clinical": {
+        "any_of_drug_classes": ["insulin", "metformin"],
+        "none_of_drug_classes": ["sulfonylurea"],
+        "max_age_at_diagnosis_months": null
+      },
+      "severity": "medium",
+      "recommendation": "Consider low-dose sulfonylurea (supporting evidence is more limited than for HNF1A).",
+      "source": "Kang E, Chung LY, Kim YJ, Oh KE, Rhie YJ. Monogenic diabetes mellitus and clinical implications of genetic diagnosis. Precis Future Med. 2021;5(3):106-116. doi:10.23838/pfm.2021.00100; Naylor RN, Patel KA, Kettunen JLT, et al. Precision treatment of beta-cell monogenic diabetes: a systematic review (ADA/EASD Precision Medicine in Diabetes Initiative). Commun Med. 2024;4:145",
+      "change_note": "Initial version"
+    },
+    {
+      "code": "D4",
+      "version": 2,
+      "kind": "treatment",
+      "title": "Neonatal diabetes (activating KCNJ11 or ABCC8 variant) on insulin",
+      "genetic": {
+        "genes": ["KCNJ11", "ABCC8"],
+        "classes": ["P", "LP"],
+        "mechanism": "activating"
+      },
+      "clinical": {
+        "any_of_drug_classes": ["insulin"],
+        "none_of_drug_classes": null,
+        "max_age_at_diagnosis_months": 12
+      },
+      "severity": "high",
+      "recommendation": "Refer to specialist to consider transfer to high-dose sulfonylurea.",
+      "source": "Kang E, Chung LY, Kim YJ, Oh KE, Rhie YJ. Monogenic diabetes mellitus and clinical implications of genetic diagnosis. Precis Future Med. 2021;5(3):106-116. doi:10.23838/pfm.2021.00100",
+      "change_note": "Version 2 adds ABCC8: activating ABCC8 variants, like activating KCNJ11 variants, cause neonatal diabetes that can respond to high-dose sulfonylurea (Kang et al. 2021). Version 1 covered KCNJ11 only."
+    },
+    {
+      "code": "D5",
+      "version": 1,
+      "kind": "cascade",
+      "title": "Monogenic diabetes variant: family cascade testing",
+      "genetic": {
+        "genes": ["GCK", "HNF1A", "HNF4A", "HNF1B", "KCNJ11", "ABCC8", "INS"],
+        "classes": ["P", "LP"],
+        "mechanism": null
+      },
+      "clinical": null,
+      "severity": "low",
+      "recommendation": "Offer genetic counselling and cascade testing of first-degree relatives (50% risk, autosomal dominant inheritance).",
+      "source": "Autosomal dominant inheritance: each first-degree relative of a carrier has a 50% chance of carrying the same variant",
+      "change_note": "Initial version"
+    },
+    {
+      "code": "D6",
+      "version": 1,
+      "kind": "monitoring",
+      "title": "Variant of uncertain significance in GCK, HNF1A or HNF4A",
+      "genetic": {
+        "genes": ["GCK", "HNF1A", "HNF4A"],
+        "classes": ["VUS"],
+        "mechanism": null
+      },
+      "clinical": null,
+      "severity": "info",
+      "recommendation": "No treatment change; variant flagged and monitored for reclassification.",
+      "source": "ClinGen Monogenic Diabetes Variant Curation Expert Panel. Specifications to the ACMG/AMP variant interpretation guidelines for GCK (v1.3.0), HNF1A and HNF4A (v2.0.0). https://cspec.genome.network; Richards S, Aziz N, Bale S, et al. Standards and guidelines for the interpretation of sequence variants: a joint consensus recommendation of the ACMG and AMP. Genet Med. 2015;17(5):405-424",
+      "change_note": "Initial version"
+    }
+  ]
+}
