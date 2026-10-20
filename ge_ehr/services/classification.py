@@ -58,11 +58,12 @@ NOT_CLASSIFIED = KnownClass("NC", "unknown", None, False, None, 0, None)
 # ClinVar term normalisation (SPEC §5.1)
 # ---------------------------------------------------------------------------
 
+# ACMG/AMP terms. A ", "-qualifier is read off first: "Pathogenic,_low_penetrance" is P,
+# "Likely_pathogenic,_low_penetrance" LP, and older ClinVar files attach non-ACMG terms the same
+# way ("Pathogenic,_other", "Benign/Likely_benign,_drug_response").
 _SIGNIFICANCE_TERMS: dict[str, str] = {
     "pathogenic": "P",
-    "pathogenic, low penetrance": "P",
     "likely pathogenic": "LP",
-    "likely pathogenic, low penetrance": "LP",
     "uncertain significance": "VUS",
     "likely benign": "LB",
     "benign": "B",
@@ -83,7 +84,8 @@ _CLASS_SPELLINGS: dict[str, str] = {
 }
 
 _KATP_CHANNEL_GENES = frozenset({"KCNJ11", "ABCC8"})
-_DIABETES_PATTERN = re.compile(r"neonatal|diabetes", re.IGNORECASE)
+_NEONATAL_DIABETES_PATTERN = re.compile(r"neonatal|diabetes", re.IGNORECASE)
+_DIABETES_PATTERN = re.compile(r"diabetes", re.IGNORECASE)
 _HYPERINSULINISM_PATTERN = re.compile(r"hyperinsulin|hypoglyc", re.IGNORECASE)
 _WHITESPACE = re.compile(r"\s+")
 _COMMA = re.compile(r"\s*,\s*")
@@ -98,8 +100,10 @@ def _normalise_term(value: str) -> str:
 def normalize_clinvar_significance(clnsig: str | None) -> str:
     """Map a raw CLNSIG value to one of :data:`ge_ehr.constants.CLASSES` (SPEC §5.1).
 
-    Only the primary term (before the first ``|``) counts; secondary terms such as
-    ``risk_factor`` are ignored. ``/``-combined terms resolve conservatively within their band
+    Case-insensitive, ``_`` read as a space. Only the primary term (before the first ``|``)
+    counts; secondary terms such as ``risk_factor`` are ignored, and so are ``,_``-qualifiers
+    (``Pathogenic,_low_penetrance`` → P; older releases write ``Pathogenic,_other``).
+    ``/``-combined terms resolve conservatively within their band
     (``Pathogenic/Likely_pathogenic`` → LP, ``Benign/Likely_benign`` → LB), non-ACMG components
     such as ``Likely_risk_allele`` are dropped, every ``Conflicting_*`` aggregate is VUS and
     anything without an ACMG term (``not_provided``, ``drug_response``, ``association``, ...) is NC.
@@ -112,8 +116,8 @@ def normalize_clinvar_significance(clnsig: str | None) -> str:
     term = _normalise_term(clnsig.split("|", 1)[0])
     if term.startswith("conflicting"):
         return "VUS"
-    parts = (part.strip() for part in term.split("/"))
-    classes = {_SIGNIFICANCE_TERMS[part] for part in parts if part in _SIGNIFICANCE_TERMS}
+    heads = (part.split(",", 1)[0].strip() for part in term.split("/"))
+    classes = {_SIGNIFICANCE_TERMS[head] for head in heads if head in _SIGNIFICANCE_TERMS}
     if not classes:
         return "NC"
     if len(classes) == 1:
@@ -148,20 +152,19 @@ def infer_mechanism(gene: str | None, condition: str | None) -> str:
     """Infer the variant mechanism from its condition (KCNJ11/ABCC8 only; other genes → ``unknown``).
 
     Activating KATP-channel variants cause neonatal diabetes and inactivating ones congenital
-    hyperinsulinism, so: a condition text mentioning ``neonatal``/``diabetes`` but no
-    hyperinsulinism/hypoglycaemia → ``activating``; the reverse → ``inactivating``; both or
-    neither → ``unknown``. ``condition`` may be ClinVar's raw CLNDN (``_`` for spaces, ``|``
-    between conditions) or readable text; the whole text is searched either way.
+    hyperinsulinism (SPEC §5.1): a condition text matching ``neonatal|diabetes`` without
+    ``hyperinsulin|hypoglyc`` → ``activating``; one matching ``hyperinsulin|hypoglyc`` without
+    ``diabetes`` → ``inactivating`` (so "Neonatal hypoglycemia" is inactivating); anything else,
+    e.g. a variant listed for both neonatal diabetes and hyperinsulinism → ``unknown``.
+    ``condition`` may be ClinVar's raw CLNDN (``_`` for spaces, ``|`` between conditions) or
+    readable text; the whole text is searched either way.
     """
     if (gene or "").upper() not in _KATP_CHANNEL_GENES or not condition:
         return "unknown"
-    mentions_diabetes = _DIABETES_PATTERN.search(condition) is not None
     mentions_hyperinsulinism = _HYPERINSULINISM_PATTERN.search(condition) is not None
-    if mentions_diabetes and not mentions_hyperinsulinism:
-        return "activating"
-    if mentions_hyperinsulinism and not mentions_diabetes:
-        return "inactivating"
-    return "unknown"
+    if not mentions_hyperinsulinism:
+        return "activating" if _NEONATAL_DIABETES_PATTERN.search(condition) else "unknown"
+    return "unknown" if _DIABETES_PATTERN.search(condition) else "inactivating"
 
 
 def classification_from_text(value: str | None) -> str | None:

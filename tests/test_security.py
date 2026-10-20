@@ -143,13 +143,17 @@ def test_lab_technician_cannot_open_recommendations(lab_client: FlaskClient, db:
 def test_forbidden_json_for_api_clients(lab_client: FlaskClient) -> None:
     response = lab_client.get("/patients/1/fhir")
     assert response.status_code == 403
-    assert response.is_json and response.get_json()["error"] == "Access denied"
+    body = response.get_json()
+    assert response.is_json and body["resourceType"] == "OperationOutcome"
+    assert body["issue"][0]["code"] == "forbidden"
 
 
 def test_anonymous_api_request_gets_401_json(client: FlaskClient) -> None:
     response = client.get("/patients/1/fhir")
     assert response.status_code == 401
-    assert response.get_json() == {"error": "unauthorized", "message": "Authentication is required."}
+    body = response.get_json()
+    assert body["resourceType"] == "OperationOutcome"
+    assert body["issue"][0]["code"] == "login"
 
 
 def test_roles_required_rejects_unknown_roles() -> None:

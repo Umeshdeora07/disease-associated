@@ -53,7 +53,7 @@ from .classification import (
 )
 
 # vcf_parser also lowers htslib's log level to errors only when it is imported.
-from .vcf_parser import GRCH37_NAME, GZIP_MAGIC
+from .vcf_parser import BGZF_EOF, GRCH37_NAME, GZIP_MAGIC, is_truncated_bgzf
 
 if TYPE_CHECKING:
     from ..models import User
@@ -102,10 +102,14 @@ _URL = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://")
 _GENEINFO = re.compile(r"(?:^|;)GENEINFO=([^;]*)")
 _SUBSET_HEADER_KEY = "ge_ehr_subset"
 
+# INFO values: written ClinVar style (whitespace as "_") with VCF 4.3 percent-encoding of the
+# characters that would break the INFO column; the reader decodes the VCF 4.3 escapes.
+_INFO_ESCAPES: tuple[tuple[str, str], ...] = (("%", "%25"), (";", "%3B"), ("=", "%3D"))
+_PERCENT_ESCAPE = re.compile(r"%(3A|3B|3D|25|2C|0D|0A|09)", re.IGNORECASE)
+
 # BGZF (blocked gzip, as written by bgzip): independent gzip members of at most 64 KiB carrying
 # a "BC" extra field with the block size, followed by an empty end-of-file block.
 _BGZF_BLOCK_INPUT = 0xFF00
-_BGZF_EOF = bytes.fromhex("1f8b08040000000000ff0600424302001b0003000000000000000000")
 
 
 @dataclass
@@ -208,17 +212,38 @@ def readable_condition(clndn: str | None) -> str | None:
 
 
 def _info_text(value: Any) -> str | None:
-    """A cyvcf2 INFO value as text (None for missing values and flags)."""
+    """A cyvcf2 INFO value as text (None for missing values and flags; escapes decoded)."""
     if value is None or isinstance(value, bool):
         return None
     if isinstance(value, tuple):
         return ",".join(str(item) for item in value)
-    return str(value)
+    return unescape_info_value(str(value))
+
+
+def unescape_info_value(value: str) -> str:
+    """Decode VCF 4.3 percent-escapes (``%3B`` → ``;``, ``%3D`` → ``=``, ``%25`` → ``%``, ...)."""
+    if "%" not in value:
+        return value
+    return _PERCENT_ESCAPE.sub(lambda match: chr(int(match.group(1), 16)), value)
 
 
 def _int_or_none(value: Any) -> int | None:
     text = str(value).strip() if value is not None else ""
     return int(text) if _DIGITS.fullmatch(text) and len(text) <= 18 else None
+
+
+def _check_not_truncated(path: Path) -> None:
+    """Raise ValueError for a bgzip file cut short at a block boundary (gzip cannot detect it)."""
+    with path.open("rb") as handle:
+        head = handle.read(18)
+        size = handle.seek(0, os.SEEK_END)
+        handle.seek(max(0, size - len(BGZF_EOF)))
+        tail = handle.read()
+    if is_truncated_bgzf(head, tail):
+        raise ValueError(
+            f"{path.name} is incomplete: its bgzip end-of-file marker is missing, so the file was cut short "
+            "(e.g. an interrupted download). Download or copy it again."
+        )
 
 
 def _open_binary_text(path: Path) -> IO[str]:
@@ -240,13 +265,14 @@ def iter_clinvar_records(path: str | os.PathLike[str]) -> Iterator[ClinVarRecord
     Records are kept when GENEINFO lists a panel gene or the position lies in a panel region
     (see :func:`panel_gene`). Alleles that are not plain bases (``.``, ``*``, ``<DEL>``,
     breakends) and records with a non-ACGTN REF are skipped. Raises ValueError when the file
-    cannot be read as a VCF.
+    cannot be read as a VCF or is truncated.
     """
-    name = os.fspath(path)
+    file_path = Path(path)
+    _check_not_truncated(file_path)
     try:
-        reader = cyvcf2.VCF(name)
-    except OSError as exc:
-        raise ValueError(f"{Path(name).name} could not be read as a VCF file ({exc}).") from None
+        reader = cyvcf2.VCF(os.fspath(file_path))
+    except Exception as exc:  # noqa: BLE001 — cyvcf2 raises OSError or a bare Exception ("cannot parse VCF header")
+        raise ValueError(f"{file_path.name} could not be read as a VCF file ({exc}).") from None
     try:
         records = iter(reader)
         while True:
@@ -255,7 +281,9 @@ def iter_clinvar_records(path: str | os.PathLike[str]) -> Iterator[ClinVarRecord
             except StopIteration:
                 return
             except Exception as exc:  # noqa: BLE001 — cyvcf2 reports htslib failures with assorted types
-                raise ValueError(f"{Path(name).name} could not be parsed as a VCF ({exc}).") from None
+                raise ValueError(
+                    f"{file_path.name} could not be read completely: the file is truncated or not a valid VCF ({exc})."
+                ) from None
             yield from _split_record(record)
     finally:
         reader.close()
@@ -325,7 +353,7 @@ def load_expert_panel_overlay(path: str | os.PathLike[str]) -> dict[int, Overlay
     entries: dict[int, OverlayEntry] = {}
     try:
         with open(path, newline="", encoding="utf-8-sig") as handle:
-            reader = csv.DictReader(handle)
+            reader = csv.DictReader(handle, strict=True)
             missing = [column for column in OVERLAY_COLUMNS if column not in (reader.fieldnames or [])]
             if missing:
                 raise ValueError(
@@ -401,15 +429,16 @@ def import_release(
     raised to at least 3, the expert-panel level). Adds a ``release_imported`` audit entry and
     flushes; the caller commits.
 
-    Raises ValueError for a file whose sha256 was already imported, a GRCh37 or non-VCF file,
-    or an invalid overlay; FileNotFoundError when ``path`` does not exist.
+    The whole file and overlay are read and validated before anything is written. Raises
+    ValueError for a file whose sha256 was already imported, a GRCh37, truncated or non-VCF
+    file, or an invalid overlay; FileNotFoundError when ``path`` does not exist.
     """
     started = time.perf_counter()
     file_path = Path(path)
     if not file_path.is_file():
         raise FileNotFoundError(f"ClinVar VCF not found: {file_path}")
-    digest = _sha256(file_path)
-    existing = db.session.execute(select(KbRelease).filter_by(file_sha256=digest)).scalar_one_or_none()
+    digest = file_sha256(file_path)
+    existing = _release_with_sha256(digest)
     if existing is not None:
         raise ValueError(
             f"{file_path.name} was already imported as release {existing.label!r} (id {existing.id}); "
@@ -418,6 +447,7 @@ def import_release(
     meta = read_vcf_header_meta(file_path)
     _check_clinvar_header(meta, file_path.name)
     overlay = load_expert_panel_overlay(expert_panel_csv) if expert_panel_csv is not None else {}
+    rows = _known_variant_rows(file_path, overlay)
 
     synthetic = bool(meta["ge_ehr_synthetic"])
     file_date = meta["fileDate"]
@@ -436,7 +466,6 @@ def import_release(
     db.session.add(release)
     db.session.flush()
 
-    rows = _known_variant_rows(file_path, overlay)
     key_ids = _variant_key_ids({key: row["gene"] for key, row in rows.items()})
     for key, row in rows.items():
         row["release_id"] = release.id
@@ -480,12 +509,22 @@ def import_release(
     return release
 
 
-def _sha256(path: Path) -> str:
+def file_sha256(path: str | os.PathLike[str]) -> str:
+    """Hex sha256 of a file (read in 1 MiB chunks)."""
     digest = hashlib.sha256()
-    with path.open("rb") as handle:
+    with Path(path).open("rb") as handle:
         while chunk := handle.read(1 << 20):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def release_for_file(path: str | os.PathLike[str]) -> KbRelease | None:
+    """The release imported from this exact file (same sha256), or None."""
+    return _release_with_sha256(file_sha256(path))
+
+
+def _release_with_sha256(digest: str) -> KbRelease | None:
+    return db.session.execute(select(KbRelease).filter_by(file_sha256=digest)).scalar_one_or_none()
 
 
 def _check_clinvar_header(meta: dict[str, Any], name: str) -> None:
@@ -498,7 +537,9 @@ def _check_clinvar_header(meta: dict[str, Any], name: str) -> None:
         )
 
 
-def _known_variant_rows(path: Path, overlay: dict[int, OverlayEntry]) -> dict[tuple[str, int, str, str], dict[str, Any]]:
+def _known_variant_rows(
+    path: Path, overlay: dict[int, OverlayEntry]
+) -> dict[tuple[str, int, str, str], dict[str, Any]]:
     """KnownVariant insert rows keyed by variant key.
 
     A key listed twice keeps the record with more review stars (the first one on a tie).
@@ -515,7 +556,9 @@ def _known_variant_rows(path: Path, overlay: dict[int, OverlayEntry]) -> dict[tu
                 continue
         rows[key] = row
     if duplicates:
-        logger.warning("%s lists %d variant key(s) more than once; kept the best-reviewed record", path.name, duplicates)
+        logger.warning(
+            "%s lists %d variant key(s) more than once; kept the best-reviewed record", path.name, duplicates
+        )
     return rows
 
 
@@ -526,7 +569,8 @@ def _known_variant_row(record: ClinVarRecord, overlay: dict[int, OverlayEntry]) 
     source = "clinvar"
     override = overlay.get(record.variation_id) if record.variation_id is not None else None
     if override is not None:
-        classification, expert_panel, source, stars = override.classification, True, "expert_panel_overlay", max(stars, 3)
+        classification, expert_panel, source = override.classification, True, "expert_panel_overlay"
+        stars = max(stars, review_stars("reviewed_by_expert_panel"))
     return {
         "clinvar_variation_id": record.variation_id,
         "allele_id": record.allele_id,
@@ -548,7 +592,9 @@ def _variant_key_ids(genes: dict[tuple[str, int, str, str], str | None]) -> dict
     """Bulk get-or-create of VariantKeys: ids for every key of ``genes`` (key → panel gene).
 
     Existing keys are found with chunked ``pos IN (...)`` queries (matched in Python); missing
-    ones are inserted in batches with RETURNING. Existing keys without a gene get one, as in
+    ones are inserted in multi-row batches whose RETURNING rows carry the key columns, so ids are
+    matched by key rather than by row order (requesting ordered RETURNING would make SQLAlchemy
+    fall back to one INSERT per row). Existing keys without a gene get one, as in
     :meth:`VariantKey.get_or_create`.
     """
     found: dict[tuple[str, int, str, str], int] = {}
@@ -570,11 +616,12 @@ def _variant_key_ids(genes: dict[tuple[str, int, str, str], str | None]) -> dict
         for (chrom, pos, ref, alt), gene in genes.items()
         if (chrom, pos, ref, alt) not in found
     ]
-    statement = insert(VariantKey).returning(VariantKey.id, sort_by_parameter_order=True)
+    statement = insert(VariantKey).returning(
+        VariantKey.id, VariantKey.chrom, VariantKey.pos, VariantKey.ref, VariantKey.alt
+    )
     for batch in batched(new_rows, INSERT_BATCH):
-        ids = db.session.execute(statement, list(batch)).scalars().all()
-        for row, key_id in zip(batch, ids, strict=True):
-            found[(row["chrom"], row["pos"], row["ref"], row["alt"])] = key_id
+        for row in db.session.execute(statement, list(batch)):
+            found[(row.chrom, row.pos, row.ref, row.alt)] = row.id
     return found
 
 
@@ -619,8 +666,9 @@ def write_clinvar_vcf(
     ``synthetic=True`` adds the mandatory synthetic header lines (SPEC §0); ``synthetic=False``
     writes ``##source=ClinVar`` and is only for records derived from real ClinVar data. Records
     are dicts with :class:`ClinVarRecord` field names or ClinVarRecord objects; ``gene`` must be a
-    panel gene (GENEINFO needs its NCBI Gene ID). INFO values are escaped: whitespace → ``_``,
-    ``;`` → ``%3B``, ``=`` → ``%3D``. Output is deterministic (BGZF blocks carry no timestamp).
+    panel gene (GENEINFO needs its NCBI Gene ID). INFO values are escaped (:func:`escape_info_value`):
+    whitespace → ``_``, ``;`` → ``%3B``, ``=`` → ``%3D``, ``%`` → ``%25``.
+    Output is deterministic (BGZF blocks carry no timestamp).
     Raises ValueError for an invalid record or fileDate.
     """
     if parse_file_date(file_date) is None:
@@ -694,8 +742,11 @@ def _record_line(record: ClinVarRecord) -> str:
 
 
 def escape_info_value(value: Any) -> str:
-    """Escape an INFO value: whitespace → ``_`` (ClinVar style), ``;`` → ``%3B``, ``=`` → ``%3D``."""
-    return _WHITESPACE.sub("_", str(value)).replace(";", "%3B").replace("=", "%3D")
+    """Escape an INFO value: whitespace → ``_`` (ClinVar style); ``%``, ``;`` and ``=`` percent-encoded."""
+    text = _WHITESPACE.sub("_", str(value))
+    for character, escape in _INFO_ESCAPES:
+        text = text.replace(character, escape)
+    return text
 
 
 def _geneinfo(gene: str | None) -> str | None:
@@ -715,7 +766,7 @@ def _bgzf_blocks(data: bytes) -> Iterator[bytes]:
         # ID1 ID2 CM FLG(FEXTRA) MTIME XFL OS XLEN | SI1='B' SI2='C' SLEN=2 BSIZE (total size - 1)
         header = struct.pack("<4BI2BH2BHH", 0x1F, 0x8B, 8, 4, 0, 0, 0xFF, 6, 66, 67, 2, len(deflated) + 25)
         yield header + deflated + struct.pack("<II", zlib.crc32(chunk), len(chunk))
-    yield _BGZF_EOF
+    yield BGZF_EOF
 
 
 def _write_vcf_text(path: Path, text: str, *, bgzip: bool) -> None:
@@ -829,7 +880,10 @@ def fetch_clinvar_subset(
 def _open_source(location: str) -> BinaryIO:
     if not _URL.match(location):
         try:
+            _check_not_truncated(Path(location))
             return open(location, "rb")
+        except ValueError as exc:
+            raise ClinVarDownloadError(str(exc)) from None
         except OSError as exc:
             raise ClinVarDownloadError(f"Cannot open {location}: {exc.strerror or exc}.") from None
     request = urllib.request.Request(location, headers={"User-Agent": _USER_AGENT})
@@ -856,7 +910,8 @@ def _subset_stream(stream: BinaryIO, output_dir: Path, location: str, newer_than
     reader = io.BufferedReader(stream) if not hasattr(stream, "peek") else stream
     try:
         binary = gzip.GzipFile(fileobj=reader) if reader.peek(2)[:2] == GZIP_MAGIC else reader
-        lines = io.TextIOWrapper(binary, encoding="utf-8")
+        # ClinVar VCFs are ASCII; a stray undecodable byte must not abort a multi-gigabyte stream.
+        lines = io.TextIOWrapper(binary, encoding="utf-8", errors="replace")
         header = _read_subset_header(lines, name)
         file_date = _subset_file_date(header, name)
         if newer_than is not None and parse_file_date(file_date) <= newer_than:
@@ -865,10 +920,10 @@ def _subset_stream(stream: BinaryIO, output_dir: Path, location: str, newer_than
         kept, total, gene_counts = _filter_subset_records(lines, name, len(header))
     except (EOFError, zlib.error, gzip.BadGzipFile):
         raise ClinVarDownloadError(f"{name} is truncated or not a valid gzip file; download it again.") from None
-    except UnicodeDecodeError:
-        raise ClinVarDownloadError(f"{name} is not a text VCF file.") from None
     except (TimeoutError, ConnectionError, http.client.HTTPException, urllib.error.URLError) as exc:
-        raise ClinVarDownloadError(f"The download of {name} was interrupted ({exc}); nothing was written. Run it again.") from None
+        raise ClinVarDownloadError(
+            f"The download of {name} was interrupted ({exc}); nothing was written. Run it again."
+        ) from None
 
     provenance = (
         f"##{_SUBSET_HEADER_KEY}={','.join(C.GENES)} (GENEINFO or GRCh38 panel region) from {name}; "
@@ -884,7 +939,8 @@ def _subset_stream(stream: BinaryIO, output_dir: Path, location: str, newer_than
         partial.unlink(missing_ok=True)
         raise
     logger.info("Wrote %s: %d of %d ClinVar records in the panel", target, len(kept), total)
-    return SubsetResult(target, file_date, location, total, len(kept), {gene: gene_counts.get(gene, 0) for gene in C.GENES})
+    counts = {gene: gene_counts.get(gene, 0) for gene in C.GENES}
+    return SubsetResult(target, file_date, location, total, len(kept), counts)
 
 
 def _read_subset_header(lines: IO[str], name: str) -> list[str]:
@@ -923,7 +979,7 @@ def _filter_subset_records(lines: IO[str], name: str, header_lines: int) -> tupl
             continue
         total += 1
         columns = text.split("\t", 8)
-        if len(columns) < 8 or not _DIGITS.fullmatch(columns[1]) or not columns[0]:
+        if len(columns) < 8 or not _DIGITS.fullmatch(columns[1]) or not columns[0] or columns[0].lower() == "chr":
             raise ClinVarDownloadError(f"{name}, line {number}: not a valid VCF record.")
         geneinfo = _GENEINFO.search(columns[7])
         gene = panel_gene(columns[0], int(columns[1]), geneinfo.group(1) if geneinfo else None)

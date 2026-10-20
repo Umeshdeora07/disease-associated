@@ -218,7 +218,8 @@ def _filler_record(rng: random.Random, variation_id: int, taken: set[tuple[str, 
         consequence = rng.choice(CONSEQUENCES["snv_benign" if benign else "snv_damaging"])
     else:
         consequence = rng.choice(CONSEQUENCES[kind])
-    condition = rng.choice(("not specified", *FILLER_CONDITIONS[gene])) if benign else rng.choice(FILLER_CONDITIONS[gene])
+    conditions = ("not specified", *FILLER_CONDITIONS[gene]) if benign else FILLER_CONDITIONS[gene]
+    condition = rng.choice(conditions)
     return {
         "chrom": info.chrom,
         "pos": pos,
@@ -269,6 +270,7 @@ def _class_summary(records: list[dict[str, Any]]) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Write both demo releases; returns the process exit status."""
     parser = argparse.ArgumentParser(description="Build the synthetic demo ClinVar-format releases (SPEC §11).")
     parser.add_argument(
         "--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR, help=f"output folder (default: {DEFAULT_OUTPUT_DIR})"

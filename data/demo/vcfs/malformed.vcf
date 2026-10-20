@@ -1,0 +1,13 @@
+##fileformat=VCFv4.2
+##source=GE-EHR synthetic malformed patient VCF for scenario S10 (synthetic data only; deliberately invalid)
+##ge_ehr_synthetic=true
+##reference=GRCh38
+##contig=<ID=12,length=133275309,assembly=GRCh38>
+##FILTER=<ID=PASS,Description="All filters passed">
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+##FORMAT=<ID=DP,Number=1,Type=Integer,Description="Read depth">
+##FORMAT=<ID=GQ,Number=1,Type=Integer,Description="Conditional genotype quality">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	DEMO-S10
+12	120978900	.	G	A	604	PASS	.	GT:DP:GQ	0/1:30:82
+12	12O994300	.	C	T	512	PASS	.	GT:DP:GQ	0/1:41:77
+12	120999100	.	A	G	PASS

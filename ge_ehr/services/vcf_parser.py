@@ -4,10 +4,12 @@ Parsing runs in two passes:
 
 1. **Validation in pure Python** over the decompressed text. htslib can crash or silently truncate
    on malformed input, so every structural problem is rejected first with a :class:`VcfError`
-   whose message (and line number) a lab technician can act on. The validated text is written to
-   a temporary file, normalised: LF line endings, no blank lines, first sample only.
-2. **cyvcf2** reads that copy: multi-allelic records are split, zygosity comes from the first
-   sample's GT, and the FILTER and 7-gene panel filters are applied with counters.
+   whose message (and line number) a lab technician can act on.
+2. **cyvcf2** reads a minimal, normalised copy written by the validation pass to a temporary
+   file. The copy keeps only what GE-EHR uses — CHROM, POS, REF, ALT, the FILTER verdict and the
+   first sample's GT — under a fixed header, so header lines, INFO and other FORMAT fields of the
+   upload never reach htslib. cyvcf2 splits multi-allelic records, decodes the genotype (zygosity)
+   and the FILTER and 7-gene panel filters are applied with counters.
 
 Each record is counted in at most one skip counter, checked in this order: outside the panel
 (``off_panel_skipped``), FILTER other than ``PASS``/``.`` (``non_pass_skipped``), no ALT allele in
@@ -26,6 +28,7 @@ import os
 import re
 import tempfile
 import zlib
+from array import array
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import TextIO
@@ -36,9 +39,9 @@ from ..constants import GRCH37_CONTIG_LENGTHS, GRCH38_CONTIG_LENGTHS, gene_for_p
 
 logger = logging.getLogger(__name__)
 
-# Patient VCFs rarely define every INFO/FORMAT/contig they use; htslib would then print one
-# warning per record to stderr. Input is validated before htslib sees it, so keep errors only
-# (unless an operator chose a level with cyvcf2's own CYVCF2_HTSLIB_LOG_LEVEL variable).
+# The normalised copy declares no contigs, so htslib adds each one with a warning; input is
+# validated before htslib sees it, so keep errors only (unless an operator chose a level with
+# cyvcf2's own CYVCF2_HTSLIB_LOG_LEVEL variable).
 HTS_LOG_ERROR = 1
 if "CYVCF2_HTSLIB_LOG_LEVEL" not in os.environ:
     cyvcf2.cyvcf2.set_htslib_log_level(HTS_LOG_ERROR)
@@ -50,19 +53,41 @@ MAX_DECOMPRESSED_BYTES = 256 * 1024 * 1024
 MAX_POSITION = 2**31 - 1
 
 GZIP_MAGIC = b"\x1f\x8b"
+# BGZF (bgzip) files are gzip members carrying a "BC" extra field and end with this empty block;
+# without it the file was cut short at a block boundary, which gzip itself cannot detect.
+BGZF_EOF = bytes.fromhex("1f8b08040000000000ff0600424302001b0003000000000000000000")
+_BGZF_PREFIX = b"\x1f\x8b\x08\x04"
+_BGZF_SUBFIELD_OFFSET = 12
+
 _BINARY_SIGNATURES: dict[bytes, str] = {
     GZIP_MAGIC: "The file is compressed twice. Decompress it once (gunzip) and upload the resulting .vcf.gz.",
-    b"BCF\x02": "This is a BCF (binary VCF) file. Convert it to VCF first, e.g. 'bcftools view -Oz -o out.vcf.gz in.bcf'.",
+    b"BCF\x02": (
+        "This is a BCF (binary VCF) file. Convert it to VCF first, e.g. 'bcftools view -Oz -o out.vcf.gz in.bcf'."
+    ),
     b"PK\x03\x04": "This is a ZIP archive (e.g. .zip or .xlsx), not a VCF. Upload the .vcf or .vcf.gz file itself.",
+    b"\xff\xfe": "The file is saved as UTF-16 text. Save it as plain (UTF-8 or ASCII) text and upload it again.",
+    b"\xfe\xff": "The file is saved as UTF-16 text. Save it as plain (UTF-8 or ASCII) text and upload it again.",
 }
+
+# The normalised copy read by cyvcf2: a fixed header, one fixed sample name and a FILTER verdict.
+FAILED_FILTER = "FAIL"
+_NORMALISED_HEADER = (
+    "##fileformat=VCFv4.2\n"
+    f'##FILTER=<ID={FAILED_FILTER},Description="Failed one or more filters in the uploaded file">\n'
+    '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">\n'
+    "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n"
+)
+_PASSING_FILTERS = frozenset({"PASS", "."})
 
 _FILEFORMAT = re.compile(r"##fileformat=(\S*)")
 _META = re.compile(r"##([^=\s]+)=(.*)")
 _ID_ATTRIBUTE = re.compile(r"(?:<|,)ID=([^,>]+)")
 _LENGTH_ATTRIBUTE = re.compile(r"(?:<|,)length=([^,>]*)")
 _ASSEMBLY_ATTRIBUTE = re.compile(r"(?:<|,)assembly=([^,>]*)")
-_STRUCTURED_KEYS_WITH_ID = frozenset({"INFO", "FORMAT", "FILTER", "ALT", "contig", "SAMPLE", "PEDIGREE"})
+_STRUCTURED_KEYS_WITH_ID = frozenset({"INFO", "FORMAT", "FILTER", "ALT", "contig", "SAMPLE"})
 GRCH37_NAME = re.compile(r"(?<![a-z0-9])(?:grch37|hg19|b37|hs37|g1k_v37)(?!\d)", re.IGNORECASE)
+# Contig names as allowed by VCF 4.3 §1.4.7 (no whitespace, commas, brackets or quotes).
+_CHROM = re.compile(r"[0-9A-Za-z!#$%&+./:;?@^_|~-][0-9A-Za-z!#$%&*+./:;=?@^_|~-]*")
 _DIGITS = re.compile(r"[0-9]+")
 _BASES = re.compile(r"[ACGTN]+", re.IGNORECASE)
 _SYMBOLIC_ALLELE = re.compile(r"<[^<>\s]+>")
@@ -117,14 +142,23 @@ class ParsedVcf:
 
 
 @dataclass
-class _ValidatedHeader:
+class _ValidatedFile:
     """What the validation pass learnt about the file."""
 
     fileformat: str
     samples: list[str] = field(default_factory=list)
-    record_count: int = 0
+    # Line number (in the upload) of each data record, in order; maps htslib failures back.
+    record_lines: array[int] = field(default_factory=lambda: array("q"))
     build_declared: bool = False
     warnings: list[str] = field(default_factory=list)
+
+    @property
+    def record_count(self) -> int:
+        return len(self.record_lines)
+
+    def line_of(self, index: int) -> int | None:
+        """Line number of the ``index``-th (0-based) data record, None past the last one."""
+        return self.record_lines[index] if index < len(self.record_lines) else None
 
 
 def parse_patient_vcf(data: bytes, filename: str = "upload.vcf") -> ParsedVcf:
@@ -136,15 +170,17 @@ def parse_patient_vcf(data: bytes, filename: str = "upload.vcf") -> ParsedVcf:
     """
     text = _decode(_decompress(data))
     with tempfile.TemporaryDirectory(prefix="ge_ehr_vcf_") as workdir:
-        normalised_path = os.path.join(workdir, "validated.vcf")
+        normalised_path = os.path.join(workdir, "normalised.vcf")
         with open(normalised_path, "w", encoding="utf-8", newline="\n") as normalised:
-            header = _validate(text, normalised)
+            validated = _validate(text, normalised)
         del text
-        parsed = ParsedVcf(sample_id=header.samples[0], fileformat=header.fileformat, warnings=header.warnings)
-        if header.record_count == 0:
+        parsed = ParsedVcf(
+            sample_id=validated.samples[0], fileformat=validated.fileformat, warnings=validated.warnings
+        )
+        if validated.record_count == 0:
             parsed.warnings.append("The file contains no variant records (header only); no variants were imported.")
         else:
-            _read_records(normalised_path, header, parsed)
+            _read_records(normalised_path, validated, parsed)
     logger.info(
         "Parsed patient VCF %r: %d records, %d panel variants, %d off panel, %d non-PASS, %d reference calls",
         filename,
@@ -162,20 +198,33 @@ def parse_patient_vcf(data: bytes, filename: str = "upload.vcf") -> ParsedVcf:
 # ---------------------------------------------------------------------------
 
 
+def is_truncated_bgzf(head: bytes, tail: bytes) -> bool:
+    """True for a BGZF (bgzip) file whose last bytes are not the BGZF end-of-file block.
+
+    ``head`` is the start of the file (at least 14 bytes), ``tail`` its last 28 bytes. Plain gzip
+    files carry no such marker and are never reported (gzip detects their truncation itself).
+    """
+    is_bgzf = head.startswith(_BGZF_PREFIX) and head[_BGZF_SUBFIELD_OFFSET : _BGZF_SUBFIELD_OFFSET + 2] == b"BC"
+    return is_bgzf and tail != BGZF_EOF
+
+
 def _decompress(data: bytes) -> bytes:
     """Return the VCF bytes, gunzipping gzip/bgzip input (detected by its magic number)."""
     if not data:
         raise VcfError("The file is empty.")
     if not data.startswith(GZIP_MAGIC):
         return data
+    truncated = VcfError(
+        "The file is gzip-compressed but incomplete or corrupt (the upload or an earlier copy was probably cut "
+        "short). Compress the VCF again (bgzip or gzip) and upload it again."
+    )
+    if is_truncated_bgzf(data, data[-len(BGZF_EOF) :]):
+        raise truncated
     try:
         with gzip.GzipFile(fileobj=io.BytesIO(data)) as stream:
             raw = stream.read(MAX_DECOMPRESSED_BYTES + 1)
     except (OSError, EOFError, zlib.error):
-        raise VcfError(
-            "The file is gzip-compressed but could not be decompressed: it is truncated or corrupt. "
-            "Compress the VCF again (bgzip or gzip) and upload it again."
-        ) from None
+        raise truncated from None
     if len(raw) > MAX_DECOMPRESSED_BYTES:
         raise VcfError(
             f"The decompressed file is larger than {MAX_DECOMPRESSED_BYTES // 2**20} MB. "
@@ -185,7 +234,10 @@ def _decompress(data: bytes) -> bytes:
 
 
 def _decode(raw: bytes) -> str:
-    """Decode UTF-8 text (a byte-order mark is dropped); binary content is rejected."""
+    """Decode UTF-8 text (a byte-order mark is dropped); binary content is rejected.
+
+    Old Mac-style files that end lines with a lone carriage return are read like LF files.
+    """
     for signature, message in _BINARY_SIGNATURES.items():
         if raw.startswith(signature):
             raise VcfError(message)
@@ -202,18 +254,21 @@ def _decode(raw: bytes) -> str:
         raise VcfError(
             "The file contains binary data (NUL bytes) and is not a text VCF.", line=text.count("\n", 0, nul) + 1
         )
+    if "\n" not in text and "\r" in text:
+        text = text.replace("\r", "\n")
     return text.removeprefix("﻿")
 
 
 def _iter_lines(text: str) -> Iterator[tuple[int, str]]:
-    """Yield ``(line_number, line)`` without building a list; CR of CRLF endings is dropped."""
+    """Yield ``(line_number, line)`` without building a list; trailing whitespace (CR of CRLF
+    endings, stray spaces or tabs left by spreadsheet exports) is dropped."""
     start, number, length = 0, 0, len(text)
     while start < length:
         end = text.find("\n", start)
         if end == -1:
             end = length
         number += 1
-        yield number, text[start:end].removesuffix("\r")
+        yield number, text[start:end].rstrip()
         start = end + 1
 
 
@@ -229,6 +284,11 @@ def _bounded_int(text: str, maximum: int) -> int:
     return value if value <= maximum else -1
 
 
+def _is_valid_chrom(name: str) -> bool:
+    """True for a VCF 4.3 contig name that is more than a bare ``chr`` prefix."""
+    return _CHROM.fullmatch(name) is not None and name.lower() != "chr"
+
+
 def _show(value: str, limit: int = 40) -> str:
     """Quote a (possibly huge or hostile) value for an error message."""
     return repr(value if len(value) <= limit else value[:limit] + "…")
@@ -239,22 +299,18 @@ def _show(value: str, limit: int = 40) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _validate(text: str, out: TextIO) -> _ValidatedHeader:
-    """Validate the whole file and write the normalised copy (first sample only) to ``out``."""
+def _validate(text: str, out: TextIO) -> _ValidatedFile:
+    """Validate the whole file and write the normalised copy (see the module docstring) to ``out``."""
     lines = _iter_lines(text)
-    first_line = next(lines, (1, ""))[1]
-    header = _ValidatedHeader(fileformat=_check_fileformat(first_line))
-    out.write(first_line.strip() + "\n")
+    validated = _ValidatedFile(fileformat=_check_fileformat(next(lines, (1, ""))[1]))
 
     for number, line in lines:
         if line.startswith("##"):
-            _check_meta_line(line, number, header)
-            out.write(line + "\n")
+            _check_meta_line(line, number, validated)
         elif line.startswith("#"):
-            header.samples = _check_column_header(line, number)
-            out.write("\t".join(line.split("\t")[:10]) + "\n")
+            validated.samples = _check_column_header(line, number)
             break
-        elif line.strip():
+        elif line:
             raise VcfError(
                 "A variant record appears before the '#CHROM' column header line. The header must end "
                 "with a tab-separated '#CHROM POS ID REF ALT QUAL FILTER INFO FORMAT <sample>' line.",
@@ -266,29 +322,28 @@ def _validate(text: str, out: TextIO) -> _ValidatedHeader:
             "so it is not a complete VCF."
         )
 
-    if not header.build_declared:
-        header.warnings.append(
+    if not validated.build_declared:
+        validated.warnings.append(
             "The header has no ##reference or ##contig lines, so the genome build could not be checked; "
             "GRCh38 coordinates were assumed."
         )
-    if len(header.samples) > 1:
-        shown = ", ".join(header.samples[:5]) + (", …" if len(header.samples) > 5 else "")
-        header.warnings.append(
-            f"The file contains {len(header.samples)} samples ({shown}); only the first sample, "
-            f"{header.samples[0]!r}, was imported."
+    if len(validated.samples) > 1:
+        shown = ", ".join(validated.samples[:5]) + (", …" if len(validated.samples) > 5 else "")
+        validated.warnings.append(
+            f"The file contains {len(validated.samples)} samples ({shown}); only the first sample, "
+            f"{validated.samples[0]!r}, was imported."
         )
 
-    column_count = len(FIXED_COLUMNS) + 1 + len(header.samples)
+    out.write(_NORMALISED_HEADER)
+    column_count = len(FIXED_COLUMNS) + 1 + len(validated.samples)
     for number, line in lines:
-        if not line.strip():
+        if not line:
             continue
         if line.startswith("#"):
             raise VcfError("Header lines must come before the '#CHROM' column header line.", line=number)
-        fields = line.split("\t")
-        _check_record(fields, number, column_count, header.samples[0])
-        out.write("\t".join(fields[:10]) + "\n")
-        header.record_count += 1
-    return header
+        out.write(_check_record(line.split("\t"), number, column_count, validated.samples[0]))
+        validated.record_lines.append(number)
+    return validated
 
 
 def _check_fileformat(line: str) -> str:
@@ -307,7 +362,7 @@ def _check_fileformat(line: str) -> str:
     return version
 
 
-def _check_meta_line(line: str, number: int, header: _ValidatedHeader) -> None:
+def _check_meta_line(line: str, number: int, validated: _ValidatedFile) -> None:
     """Check one ``##key=value`` line; reject GRCh37/hg19 reference and contig declarations."""
     match = _META.fullmatch(line)
     if match is None:
@@ -321,7 +376,7 @@ def _check_meta_line(line: str, number: int, header: _ValidatedHeader) -> None:
         if key in _STRUCTURED_KEYS_WITH_ID and _ID_ATTRIBUTE.search(value) is None:
             raise VcfError(f"The ##{key} header line has no ID=... attribute.", line=number)
     if key == "reference":
-        header.build_declared = True
+        validated.build_declared = True
         if GRCH37_NAME.search(value):
             raise VcfError(
                 f"GRCh38 required: the ##reference line names a GRCh37/hg19 genome ({_show(value)}). "
@@ -329,7 +384,7 @@ def _check_meta_line(line: str, number: int, header: _ValidatedHeader) -> None:
                 line=number,
             )
     elif key == "contig":
-        header.build_declared = True
+        validated.build_declared = True
         _check_contig(value, number)
 
 
@@ -342,7 +397,7 @@ def _check_contig(value: str, number: int) -> None:
             line=number,
         )
     contig_id, length = _ID_ATTRIBUTE.search(value), _LENGTH_ATTRIBUTE.search(value)
-    if contig_id is None or length is None:
+    if contig_id is None or length is None or not _is_valid_chrom(contig_id.group(1)):
         return
     chrom, contig_length = normalize_chrom(contig_id.group(1)), _bounded_int(length.group(1), MAX_POSITION)
     if chrom in GRCH37_CONTIG_LENGTHS and GRCH37_CONTIG_LENGTHS[chrom] == contig_length:
@@ -367,7 +422,7 @@ def _check_column_header(line: str, number: int) -> list[str]:
             f"(found {_show(line, 80)}).",
             line=number,
         )
-    if len(columns) < len(FIXED_COLUMNS) + 2:
+    if len(columns) == len(FIXED_COLUMNS):
         raise VcfError(
             "The '#CHROM' header line has no FORMAT and sample columns: a patient VCF must contain the "
             "genotypes of at least one sample.",
@@ -378,18 +433,26 @@ def _check_column_header(line: str, number: int) -> list[str]:
             f"The 9th column of the '#CHROM' header line must be FORMAT (found {_show(columns[8])}).", line=number
         )
     samples = columns[len(FIXED_COLUMNS) + 1 :]
+    if not samples:
+        raise VcfError(
+            "The '#CHROM' header line has a FORMAT column but no sample column: a patient VCF must contain "
+            "the genotypes of at least one sample.",
+            line=number,
+        )
     if any(not sample.strip() for sample in samples):
         raise VcfError("The '#CHROM' header line contains an empty sample name.", line=number)
     seen: set[str] = set()
     for sample in samples:
         if sample in seen:
-            raise VcfError(f"Sample name {_show(sample)} appears more than once in the '#CHROM' header line.", line=number)
+            raise VcfError(
+                f"Sample name {_show(sample)} appears more than once in the '#CHROM' header line.", line=number
+            )
         seen.add(sample)
     return samples
 
 
-def _check_record(fields: list[str], number: int, column_count: int, sample: str) -> None:
-    """Validate one data line (already split on tabs)."""
+def _check_record(fields: list[str], number: int, column_count: int, sample: str) -> str:
+    """Validate one data line (already split on tabs) and return its normalised copy."""
     if len(fields) != column_count:
         hint = ""
         if len(fields) < column_count and any(" " in value for value in fields):
@@ -400,8 +463,12 @@ def _check_record(fields: list[str], number: int, column_count: int, sample: str
             line=number,
         )
     chrom, pos, _id, ref, alt, _qual, filter_value, _info, format_keys, sample_value = fields[:10]
-    if not chrom or any(char.isspace() for char in chrom):
-        raise VcfError("The CHROM column is empty or contains spaces.", line=number)
+    if not _is_valid_chrom(chrom):
+        raise VcfError(
+            f"CHROM {_show(chrom)} is not a valid chromosome name (e.g. 7 or chr7; no spaces, commas, quotes "
+            "or angle brackets).",
+            line=number,
+        )
     if _bounded_int(pos, MAX_POSITION) < 1:
         raise VcfError(f"POS must be a positive whole number, found {_show(pos)}.", line=number)
     if not _BASES.fullmatch(ref):
@@ -422,6 +489,7 @@ def _check_record(fields: list[str], number: int, column_count: int, sample: str
         raise VcfError(f"The genotype column of sample {sample!r} is empty; use './.' for a missing call.", line=number)
     values = sample_value.split(":")
     gt_index = keys.index("GT")
+    # Trailing FORMAT fields may be dropped from a sample column (VCF 4.2 §1.6.2): GT is missing.
     genotype = values[gt_index] if gt_index < len(values) else "."
     if not _GENOTYPE.fullmatch(genotype):
         raise VcfError(
@@ -436,6 +504,8 @@ def _check_record(fields: list[str], number: int, column_count: int, sample: str
                 f"{alt_count} ALT allele(s).",
                 line=number,
             )
+    verdict = filter_value if filter_value in _PASSING_FILTERS else FAILED_FILTER
+    return f"{chrom}\t{pos}\t.\t{ref}\t{alt}\t.\t{verdict}\t.\tGT\t{genotype}\n"
 
 
 def _check_alt_alleles(alt: str, number: int) -> int:
@@ -461,8 +531,8 @@ def _check_alt_alleles(alt: str, number: int) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _read_records(path: str, header: _ValidatedHeader, parsed: ParsedVcf) -> None:
-    """Read the validated copy with cyvcf2 and fill ``parsed`` (variants, counters, warnings)."""
+def _read_records(path: str, validated: _ValidatedFile, parsed: ParsedVcf) -> None:
+    """Read the normalised copy with cyvcf2 and fill ``parsed`` (variants, counters, warnings)."""
     seen: set[tuple[str, int, str, str]] = set()
     symbolic: list[str] = []
     duplicates: list[str] = []
@@ -471,45 +541,26 @@ def _read_records(path: str, header: _ValidatedHeader, parsed: ParsedVcf) -> Non
     except OSError as exc:
         raise VcfError(f"The file could not be read as a VCF ({exc}).") from None
     try:
-        for record in _htslib_records(reader):
+        records = iter(reader)
+        while True:
+            try:
+                record = next(records)
+            except StopIteration:
+                break
+            except Exception:  # noqa: BLE001 — cyvcf2 reports htslib failures with assorted types
+                raise VcfError(
+                    "This variant record could not be read; check its CHROM, POS, REF, ALT, FILTER and GT values.",
+                    line=validated.line_of(parsed.total_records),
+                ) from None
             parsed.total_records += 1
-            chrom, pos = normalize_chrom(record.CHROM), record.POS
-            gene = gene_for_position(chrom, pos)
-            if gene is None:
-                parsed.off_panel_skipped += 1
-                continue
-            if record.FILTER is not None:
-                parsed.non_pass_skipped += 1
-                continue
-            *alleles, phased = record.genotypes[0]
-            carried = sorted({allele for allele in alleles if allele > 0})
-            if not carried:
-                parsed.ref_calls_skipped += 1
-                continue
-            genotype = ("|" if phased else "/").join("." if allele < 0 else str(allele) for allele in alleles)
-            filter_value = "PASS" if "PASS" in record.FILTERS else "."
-            ref = record.REF.upper()
-            for index in carried:
-                alt = record.ALT[index - 1].upper()
-                if alt == "*":  # spanning deletion: the allele belongs to an upstream record
-                    continue
-                if not _BASES.fullmatch(alt):
-                    symbolic.append(f"{alt} at {chrom}:{pos}")
-                    continue
-                key = (chrom, pos, ref, alt)
-                if key in seen:
-                    duplicates.append(f"{chrom}-{pos}-{ref}-{alt}")
-                    continue
-                seen.add(key)
-                parsed.variants.append(
-                    ParsedVariant(chrom, pos, ref, alt, _zygosity(alleles, index), gene, filter_value, genotype)
-                )
+            _add_record(record, parsed, seen, symbolic, duplicates)
     finally:
         reader.close()
-    if parsed.total_records != header.record_count:
+    if parsed.total_records != validated.record_count:
         raise VcfError(
-            f"The file could not be read completely: it has {header.record_count} variant records but only "
-            f"{parsed.total_records} could be parsed."
+            f"The file could not be read completely: it has {validated.record_count} variant records but only "
+            f"{parsed.total_records} could be read.",
+            line=validated.line_of(parsed.total_records),
         )
     if symbolic:
         parsed.warnings.append(
@@ -523,17 +574,44 @@ def _read_records(path: str, header: _ValidatedHeader, parsed: ParsedVcf) -> Non
         )
 
 
-def _htslib_records(reader: cyvcf2.VCF) -> Iterator[cyvcf2.Variant]:
-    """Iterate cyvcf2 records, turning any htslib parse failure into a :class:`VcfError`."""
-    iterator = iter(reader)
-    while True:
-        try:
-            record = next(iterator)
-        except StopIteration:
-            return
-        except Exception as exc:  # noqa: BLE001 — cyvcf2 reports htslib failures with assorted types
-            raise VcfError(f"The file could not be parsed as a VCF ({exc}).") from None
-        yield record
+def _add_record(
+    record: cyvcf2.Variant,
+    parsed: ParsedVcf,
+    seen: set[tuple[str, int, str, str]],
+    symbolic: list[str],
+    duplicates: list[str],
+) -> None:
+    """Apply the panel, FILTER and genotype filters to one record and keep its carried ALT alleles."""
+    chrom, pos = normalize_chrom(record.CHROM), record.POS
+    gene = gene_for_position(chrom, pos)
+    if gene is None:
+        parsed.off_panel_skipped += 1
+        return
+    if record.FILTER is not None:
+        parsed.non_pass_skipped += 1
+        return
+    *alleles, phased = record.genotypes[0]
+    carried = sorted({allele for allele in alleles if allele > 0})
+    if not carried:
+        parsed.ref_calls_skipped += 1
+        return
+    genotype = ("|" if phased else "/").join("." if allele < 0 else str(allele) for allele in alleles)
+    filter_value = "PASS" if "PASS" in record.FILTERS else "."
+    ref = record.REF.upper()
+    for index in carried:
+        alt = record.ALT[index - 1].upper()
+        if alt == "*":  # spanning deletion: the allele belongs to an upstream record
+            continue
+        if not _BASES.fullmatch(alt):
+            symbolic.append(f"{alt} at {chrom}:{pos}")
+            continue
+        key = (chrom, pos, ref, alt)
+        if key in seen:
+            duplicates.append(f"{chrom}-{pos}-{ref}-{alt}")
+            continue
+        seen.add(key)
+        zygosity = _zygosity(alleles, index)
+        parsed.variants.append(ParsedVariant(chrom, pos, ref, alt, zygosity, gene, filter_value, genotype))
 
 
 def _zygosity(alleles: list[int], alt_index: int) -> str:

@@ -18,12 +18,14 @@ Examples (from the repository root):
     .venv/bin/python scripts/fetch_clinvar.py                       # current release
     .venv/bin/python scripts/fetch_clinvar.py --date 20230107       # archived weekly release
     .venv/bin/python scripts/fetch_clinvar.py --input ~/Downloads/clinvar_20230107.vcf.gz
+    .venv/bin/python scripts/fetch_clinvar.py --newer-than 2025-01-06   # cron: only newer releases
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
+from datetime import date
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -55,7 +57,20 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="DIR",
         help=f"where the subset is written (default: {DEFAULT_OUTPUT_DIR})",
     )
+    parser.add_argument(
+        "--newer-than",
+        type=_iso_date,
+        metavar="YYYY-MM-DD",
+        help="write nothing unless the release's ##fileDate is later than this date (for scheduled jobs)",
+    )
     return parser
+
+
+def _iso_date(value: str) -> date:
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{value!r} is not a date written as YYYY-MM-DD") from None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -68,11 +83,13 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(str(exc))
     print(f"Reading {source} ...", flush=True)
     try:
-        result = fetch_clinvar_subset(source, args.output_dir)
+        result = fetch_clinvar_subset(source, args.output_dir, newer_than=args.newer_than)
     except (ClinVarDownloadError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    assert result is not None  # fetch_clinvar_subset only skips files when newer_than is given
+    if result is None:
+        print(f"The release is not newer than {args.newer_than}; nothing was written.")
+        return 0
     print(f"ClinVar fileDate {result.file_date}: kept {result.kept_records:,} of {result.total_records:,} records.")
     for gene, count in result.gene_counts.items():
         print(f"  {gene:<7} {count:>7,}")

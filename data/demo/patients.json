@@ -1,0 +1,599 @@
+[
+  {
+    "mrn": "DEMO-0001",
+    "given_name": "Maya",
+    "family_name": "Okonkwo",
+    "sex": "female",
+    "birth_date": "1994-05-12",
+    "family_id": null,
+    "diagnosis": {
+      "diabetes_type": "type1",
+      "age_at_diagnosis_months": 180,
+      "diagnosed_on": "2009-05-26"
+    },
+    "medications": [
+      {
+        "drug_name": "Insulin glargine 100 units/mL (Lantus)",
+        "drug_class": "insulin",
+        "dose": "22 units subcutaneously at bedtime",
+        "start_date": "2009-05-27"
+      }
+    ],
+    "vcf": "DEMO-0001.vcf",
+    "scenarios": [
+      "S1"
+    ],
+    "variants": [
+      {
+        "id": "V01",
+        "gene": "HNF1A",
+        "chrom": "12",
+        "pos": 120978900,
+        "ref": "G",
+        "alt": "A",
+        "zygosity": "heterozygous"
+      },
+      {
+        "id": "B01",
+        "gene": "HNF1A",
+        "chrom": "12",
+        "pos": 121001000,
+        "ref": "C",
+        "alt": "T",
+        "zygosity": "heterozygous"
+      }
+    ],
+    "notes": "Synthetic demo patient (scenario S1). Labelled type 1 diabetes at 15 and treated with basal insulin; islet autoantibodies negative and C-peptide preserved, so a monogenic diabetes panel was requested. Panel: HNF1A pathogenic variant plus a benign HNF1A background variant."
+  },
+  {
+    "mrn": "DEMO-0002",
+    "given_name": "Tomás",
+    "family_name": "Herrera",
+    "sex": "male",
+    "birth_date": "1979-02-03",
+    "family_id": null,
+    "diagnosis": {
+      "diabetes_type": "type2",
+      "age_at_diagnosis_months": 300,
+      "diagnosed_on": "2004-02-17"
+    },
+    "medications": [
+      {
+        "drug_name": "Gliclazide 80 mg tablet",
+        "drug_class": "sulfonylurea",
+        "dose": "40 mg twice daily",
+        "start_date": "2017-09-12"
+      }
+    ],
+    "vcf": "DEMO-0002.vcf",
+    "scenarios": [
+      "S2"
+    ],
+    "variants": [
+      {
+        "id": "V01",
+        "gene": "HNF1A",
+        "chrom": "12",
+        "pos": 120978900,
+        "ref": "G",
+        "alt": "A",
+        "zygosity": "heterozygous"
+      }
+    ],
+    "notes": "Synthetic demo patient (scenario S2). Type 2 diabetes diagnosed at 25 with a strong family history; already well controlled on low-dose gliclazide. Panel: HNF1A pathogenic variant."
+  },
+  {
+    "mrn": "DEMO-0003",
+    "given_name": "Hannah",
+    "family_name": "Lindqvist",
+    "sex": "female",
+    "birth_date": "1964-08-21",
+    "family_id": null,
+    "diagnosis": {
+      "diabetes_type": "type2",
+      "age_at_diagnosis_months": 360,
+      "diagnosed_on": "1994-09-06"
+    },
+    "medications": [
+      {
+        "drug_name": "Metformin 500 mg tablet",
+        "drug_class": "metformin",
+        "dose": "500 mg twice daily with meals",
+        "start_date": "1994-10-03"
+      }
+    ],
+    "vcf": "DEMO-0003.vcf",
+    "scenarios": [
+      "S3"
+    ],
+    "variants": [
+      {
+        "id": "V02",
+        "gene": "GCK",
+        "chrom": "7",
+        "pos": 44145200,
+        "ref": "C",
+        "alt": "T",
+        "zygosity": "heterozygous"
+      }
+    ],
+    "notes": "Synthetic demo patient (scenario S3). Mild stable fasting hyperglycaemia since age 30, labelled type 2 diabetes and treated with metformin; HbA1c unchanged on treatment. Panel: GCK pathogenic variant."
+  },
+  {
+    "mrn": "DEMO-0004",
+    "given_name": "Samuel",
+    "family_name": "Adeyemi",
+    "sex": "male",
+    "birth_date": "1981-11-02",
+    "family_id": null,
+    "diagnosis": {
+      "diabetes_type": "other",
+      "age_at_diagnosis_months": 240,
+      "diagnosed_on": "2001-11-15"
+    },
+    "medications": [],
+    "vcf": "DEMO-0004.vcf",
+    "scenarios": [
+      "S4"
+    ],
+    "variants": [
+      {
+        "id": "V02",
+        "gene": "GCK",
+        "chrom": "7",
+        "pos": 44145200,
+        "ref": "C",
+        "alt": "T",
+        "zygosity": "heterozygous"
+      },
+      {
+        "id": "B02",
+        "gene": "GCK",
+        "chrom": "7",
+        "pos": 44180000,
+        "ref": "A",
+        "alt": "G",
+        "zygosity": "heterozygous"
+      }
+    ],
+    "notes": "Synthetic demo patient (scenario S4). Mild fasting hyperglycaemia found at 20, managed by diet without glucose-lowering medication. Panel: GCK pathogenic variant plus a likely benign GCK background variant."
+  },
+  {
+    "mrn": "DEMO-0005",
+    "given_name": "Fatima",
+    "family_name": "Haddad",
+    "sex": "female",
+    "birth_date": "1977-04-09",
+    "family_id": null,
+    "diagnosis": {
+      "diabetes_type": "type2",
+      "age_at_diagnosis_months": 264,
+      "diagnosed_on": "1999-04-20"
+    },
+    "medications": [
+      {
+        "drug_name": "Metformin 500 mg tablet",
+        "drug_class": "metformin",
+        "dose": "500 mg twice daily with meals",
+        "start_date": "1999-05-03"
+      }
+    ],
+    "vcf": "DEMO-0005.vcf",
+    "scenarios": [
+      "S5",
+      "RS3"
+    ],
+    "variants": [
+      {
+        "id": "V03",
+        "gene": "HNF4A",
+        "chrom": "20",
+        "pos": 44401300,
+        "ref": "C",
+        "alt": "T",
+        "zygosity": "heterozygous"
+      }
+    ],
+    "notes": "Synthetic demo patient (scenarios S5, RS3). Type 2 diabetes diagnosed at 22, slim, on metformin; mother and grandmother diagnosed young. Panel: HNF4A likely pathogenic variant (pathogenic in R2)."
+  },
+  {
+    "mrn": "DEMO-0006",
+    "given_name": "Leo",
+    "family_name": "Novak",
+    "sex": "male",
+    "birth_date": "2023-07-19",
+    "family_id": null,
+    "diagnosis": {
+      "diabetes_type": "neonatal",
+      "age_at_diagnosis_months": 2,
+      "diagnosed_on": "2023-09-27"
+    },
+    "medications": [
+      {
+        "drug_name": "Insulin lispro 100 units/mL via insulin pump (Humalog)",
+        "drug_class": "insulin",
+        "dose": "0.2 units/hour basal rate",
+        "start_date": "2023-09-27"
+      }
+    ],
+    "vcf": "DEMO-0006.vcf",
+    "scenarios": [
+      "S6"
+    ],
+    "variants": [
+      {
+        "id": "V04",
+        "gene": "KCNJ11",
+        "chrom": "11",
+        "pos": 17387100,
+        "ref": "C",
+        "alt": "T",
+        "zygosity": "heterozygous"
+      }
+    ],
+    "notes": "Synthetic demo patient (scenario S6). Neonatal diabetes diagnosed at 2 months with severe hyperglycaemia; on insulin pump therapy. Panel: KCNJ11 pathogenic (activating) variant."
+  },
+  {
+    "mrn": "DEMO-0007",
+    "given_name": "Grace",
+    "family_name": "Mwangi",
+    "sex": "female",
+    "birth_date": "2010-01-25",
+    "family_id": null,
+    "diagnosis": {
+      "diabetes_type": "type1",
+      "age_at_diagnosis_months": 96,
+      "diagnosed_on": "2018-02-08"
+    },
+    "medications": [
+      {
+        "drug_name": "Insulin glargine 100 units/mL (Lantus)",
+        "drug_class": "insulin",
+        "dose": "10 units subcutaneously at bedtime",
+        "start_date": "2018-02-09"
+      }
+    ],
+    "vcf": "DEMO-0007.vcf",
+    "scenarios": [
+      "S7"
+    ],
+    "variants": [
+      {
+        "id": "V05",
+        "gene": "INS",
+        "chrom": "11",
+        "pos": 2160500,
+        "ref": "G",
+        "alt": "A",
+        "zygosity": "heterozygous"
+      }
+    ],
+    "notes": "Synthetic demo patient (scenario S7). Insulin-requiring diabetes diagnosed at 8, autoantibody negative. Panel: INS likely pathogenic variant (no INS-specific treatment rule)."
+  },
+  {
+    "mrn": "DEMO-0008",
+    "given_name": "Arjun",
+    "family_name": "Mehta",
+    "sex": "male",
+    "birth_date": "2003-06-30",
+    "family_id": null,
+    "diagnosis": {
+      "diabetes_type": "type1",
+      "age_at_diagnosis_months": 192,
+      "diagnosed_on": "2019-07-10"
+    },
+    "medications": [
+      {
+        "drug_name": "Insulin degludec 100 units/mL (Tresiba)",
+        "drug_class": "insulin",
+        "dose": "24 units subcutaneously once daily",
+        "start_date": "2019-07-11"
+      }
+    ],
+    "vcf": "DEMO-0008.vcf",
+    "scenarios": [
+      "S8",
+      "RS1"
+    ],
+    "variants": [
+      {
+        "id": "V06",
+        "gene": "HNF1A",
+        "chrom": "12",
+        "pos": 120994300,
+        "ref": "C",
+        "alt": "T",
+        "zygosity": "heterozygous"
+      },
+      {
+        "id": "B03",
+        "gene": "HNF1B",
+        "chrom": "17",
+        "pos": 37700000,
+        "ref": "G",
+        "alt": "A",
+        "zygosity": "heterozygous"
+      }
+    ],
+    "notes": "Synthetic demo patient (scenarios S8, RS1). Labelled type 1 diabetes at 16, low insulin requirement. Panel: HNF1A variant of uncertain significance (likely pathogenic in R2) plus a benign HNF1B variant."
+  },
+  {
+    "mrn": "DEMO-0009",
+    "given_name": "Eleanor",
+    "family_name": "Fitzgerald",
+    "sex": "female",
+    "birth_date": "1956-10-11",
+    "family_id": null,
+    "diagnosis": {
+      "diabetes_type": "type2",
+      "age_at_diagnosis_months": 480,
+      "diagnosed_on": "1996-10-22"
+    },
+    "medications": [
+      {
+        "drug_name": "Metformin XR 1000 mg tablet",
+        "drug_class": "metformin",
+        "dose": "1000 mg once daily with the evening meal",
+        "start_date": "1996-11-05"
+      }
+    ],
+    "vcf": "DEMO-0009.vcf",
+    "scenarios": [
+      "S9"
+    ],
+    "variants": [
+      {
+        "id": "B01",
+        "gene": "HNF1A",
+        "chrom": "12",
+        "pos": 121001000,
+        "ref": "C",
+        "alt": "T",
+        "zygosity": "heterozygous"
+      },
+      {
+        "id": "B02",
+        "gene": "GCK",
+        "chrom": "7",
+        "pos": 44180000,
+        "ref": "A",
+        "alt": "G",
+        "zygosity": "heterozygous"
+      },
+      {
+        "id": "B04",
+        "gene": "ABCC8",
+        "chrom": "11",
+        "pos": 17450000,
+        "ref": "C",
+        "alt": "T",
+        "zygosity": "heterozygous"
+      },
+      {
+        "id": "X01",
+        "gene": null,
+        "chrom": "1",
+        "pos": 1000000,
+        "ref": "A",
+        "alt": "G",
+        "zygosity": "heterozygous"
+      }
+    ],
+    "notes": "Synthetic demo patient (scenario S9). Type 2 diabetes diagnosed at 40, on metformin. Panel: benign and likely benign background variants only; the VCF also carries one off-panel variant."
+  },
+  {
+    "mrn": "DEMO-0010",
+    "given_name": "Marcus",
+    "family_name": "Bell",
+    "sex": "male",
+    "birth_date": "1968-03-05",
+    "family_id": null,
+    "diagnosis": {
+      "diabetes_type": "type2",
+      "age_at_diagnosis_months": 420,
+      "diagnosed_on": "2003-03-18"
+    },
+    "medications": [
+      {
+        "drug_name": "Metformin 500 mg tablet",
+        "drug_class": "metformin",
+        "dose": "500 mg twice daily with meals",
+        "start_date": "2003-04-01"
+      }
+    ],
+    "vcf": "DEMO-0010.vcf",
+    "scenarios": [
+      "RS2"
+    ],
+    "variants": [
+      {
+        "id": "V07",
+        "gene": "GCK",
+        "chrom": "7",
+        "pos": 44150500,
+        "ref": "G",
+        "alt": "A",
+        "zygosity": "heterozygous"
+      }
+    ],
+    "notes": "Synthetic demo patient (scenario RS2). Mild hyperglycaemia since 35, on metformin. Panel: GCK likely pathogenic variant (downgraded to uncertain significance in R2)."
+  },
+  {
+    "mrn": "DEMO-0011",
+    "given_name": "Sofia",
+    "family_name": "Castillo",
+    "sex": "female",
+    "birth_date": "2001-09-17",
+    "family_id": null,
+    "diagnosis": {
+      "diabetes_type": "type1",
+      "age_at_diagnosis_months": 150,
+      "diagnosed_on": "2014-03-25"
+    },
+    "medications": [
+      {
+        "drug_name": "Insulin glargine 100 units/mL (Lantus)",
+        "drug_class": "insulin",
+        "dose": "16 units subcutaneously at bedtime",
+        "start_date": "2014-03-26"
+      }
+    ],
+    "vcf": "DEMO-0011.vcf",
+    "scenarios": [
+      "RS4"
+    ],
+    "variants": [
+      {
+        "id": "V08",
+        "gene": "HNF1A",
+        "chrom": "12",
+        "pos": 120999100,
+        "ref": "A",
+        "alt": "G",
+        "zygosity": "heterozygous"
+      }
+    ],
+    "notes": "Synthetic demo patient (scenario RS4). Type 1 diabetes diagnosed at 12, on insulin. Panel: HNF1A variant of uncertain significance (likely benign in R2)."
+  },
+  {
+    "mrn": "DEMO-0012",
+    "given_name": "Noah",
+    "family_name": "Haugen",
+    "sex": "male",
+    "birth_date": "2016-12-02",
+    "family_id": null,
+    "diagnosis": {
+      "diabetes_type": "neonatal",
+      "age_at_diagnosis_months": 3,
+      "diagnosed_on": "2017-03-10"
+    },
+    "medications": [
+      {
+        "drug_name": "Insulin isophane (NPH) 100 units/mL (Humulin N)",
+        "drug_class": "insulin",
+        "dose": "1 unit subcutaneously twice daily",
+        "start_date": "2017-03-10"
+      }
+    ],
+    "vcf": "DEMO-0012.vcf",
+    "scenarios": [
+      "RS5"
+    ],
+    "variants": [
+      {
+        "id": "V09",
+        "gene": "ABCC8",
+        "chrom": "11",
+        "pos": 17410300,
+        "ref": "G",
+        "alt": "A",
+        "zygosity": "heterozygous"
+      }
+    ],
+    "notes": "Synthetic demo patient (scenario RS5). Neonatal diabetes diagnosed at 3 months, on insulin. Panel: ABCC8 pathogenic (activating) variant; rule D4 covers ABCC8 from rules v2 onwards."
+  },
+  {
+    "mrn": "DEMO-0013",
+    "given_name": "Ana",
+    "family_name": "Petrovic",
+    "sex": "female",
+    "birth_date": "1985-07-14",
+    "family_id": "FAM-RS6",
+    "diagnosis": {
+      "diabetes_type": "type2",
+      "age_at_diagnosis_months": 324,
+      "diagnosed_on": "2012-07-30"
+    },
+    "medications": [
+      {
+        "drug_name": "Metformin 500 mg tablet",
+        "drug_class": "metformin",
+        "dose": "500 mg twice daily with meals",
+        "start_date": "2012-08-15"
+      }
+    ],
+    "vcf": "DEMO-0013.vcf",
+    "scenarios": [
+      "RS6"
+    ],
+    "variants": [
+      {
+        "id": "V10",
+        "gene": "HNF4A",
+        "chrom": "20",
+        "pos": 44410200,
+        "ref": "G",
+        "alt": "T",
+        "zygosity": "heterozygous"
+      }
+    ],
+    "notes": "Synthetic demo patient (scenario RS6, family FAM-RS6: mother of DEMO-0014 and DEMO-0015). Type 2 diabetes diagnosed at 27, on metformin. Panel: HNF4A variant of uncertain significance shared with her children (likely pathogenic in R2)."
+  },
+  {
+    "mrn": "DEMO-0014",
+    "given_name": "Luka",
+    "family_name": "Petrovic",
+    "sex": "male",
+    "birth_date": "2009-04-03",
+    "family_id": "FAM-RS6",
+    "diagnosis": {
+      "diabetes_type": "type1",
+      "age_at_diagnosis_months": 168,
+      "diagnosed_on": "2023-04-19"
+    },
+    "medications": [
+      {
+        "drug_name": "Insulin glargine 100 units/mL (Lantus)",
+        "drug_class": "insulin",
+        "dose": "14 units subcutaneously at bedtime",
+        "start_date": "2023-04-20"
+      }
+    ],
+    "vcf": "DEMO-0014.vcf",
+    "scenarios": [
+      "RS6"
+    ],
+    "variants": [
+      {
+        "id": "V10",
+        "gene": "HNF4A",
+        "chrom": "20",
+        "pos": 44410200,
+        "ref": "G",
+        "alt": "T",
+        "zygosity": "heterozygous"
+      }
+    ],
+    "notes": "Synthetic demo patient (scenario RS6, family FAM-RS6: son of DEMO-0013). Labelled type 1 diabetes at 14, on insulin. Panel: the family's HNF4A variant."
+  },
+  {
+    "mrn": "DEMO-0015",
+    "given_name": "Mila",
+    "family_name": "Petrovic",
+    "sex": "female",
+    "birth_date": "2013-11-21",
+    "family_id": "FAM-RS6",
+    "diagnosis": {
+      "diabetes_type": "none",
+      "age_at_diagnosis_months": null,
+      "diagnosed_on": null
+    },
+    "medications": [],
+    "vcf": "DEMO-0015.vcf",
+    "scenarios": [
+      "RS6"
+    ],
+    "variants": [
+      {
+        "id": "V10",
+        "gene": "HNF4A",
+        "chrom": "20",
+        "pos": 44410200,
+        "ref": "G",
+        "alt": "T",
+        "zygosity": "heterozygous"
+      }
+    ],
+    "notes": "Synthetic demo patient (scenario RS6, family FAM-RS6: daughter of DEMO-0013). No diabetes; tested for the family's HNF4A variant (cascade testing)."
+  }
+]

@@ -1,0 +1,9 @@
+##fileformat=VCFv4.1
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+##contig=<ID=7,length=159138663,assembly=b37>
+##contig=<ID=11,length=135006516,assembly=b37>
+##reference=file:///references/b37/human_g1k_v37.fasta
+##source=GE-EHR test fixture (synthetic patient genotypes on GRCh37 coordinates)
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	SYNTH-0002
+7	44184000	.	C	T	500	PASS	.	GT	0/1
+11	17408500	.	G	A	500	PASS	.	GT	0/1

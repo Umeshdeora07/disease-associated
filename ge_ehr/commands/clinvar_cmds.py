@@ -5,7 +5,7 @@
 * ``flask clinvar list``
 * ``flask clinvar sync [--url URL] [--strategy] [--output-dir DIR]`` — the scheduled job: download
   the latest ClinVar GRCh38 VCF, skip it unless its fileDate is newer than the current release's,
-  write the 7-gene subset, import it and activate it.
+  write the 7-gene subset, import it (unless a failed earlier run already did) and activate it.
 
 Each command commits its own work. On an error the session is rolled back and a
 :class:`click.ClickException` with a clear message ends the command (exit status 1). An import
@@ -104,7 +104,9 @@ def activate_command(release_id: int, strategy: str) -> None:
     """Make release RELEASE_ID current and re-evaluate the affected patients."""
     release = db.session.get(KbRelease, release_id)
     if release is None:
-        raise click.ClickException(f"There is no knowledge-base release with id {release_id}; see 'flask clinvar list'.")
+        raise click.ClickException(
+            f"There is no knowledge-base release with id {release_id}; see 'flask clinvar list'."
+        )
     if release.is_current:
         click.echo(f"Release {release.label!r} (id {release.id}) is already the current release; nothing to do.")
         return
@@ -173,7 +175,15 @@ def sync_command(url: str | None, strategy: str, output_dir: Path | None) -> Non
         f"Wrote {result.path}: {result.kept_records:,} of {result.total_records:,} ClinVar records are in the "
         "7-gene panel."
     )
-    release = _import_release(result.path)
+    # A previous run may have imported this very subset and then failed to activate it.
+    release = clinvar.release_for_file(result.path)
+    if release is None:
+        release = _import_release(result.path)
+    else:
+        click.echo(f"{result.path.name} was already imported as release {release.label!r} (id {release.id}).")
+        if release.is_current:
+            click.echo("It is already the current release; nothing to do.")
+            return
     _activate_release(release, strategy)
 
 
@@ -238,9 +248,10 @@ def _activate_release(release: KbRelease, strategy: str) -> None:
 
 def _echo_run(release: KbRelease, run: ReevaluationRun) -> None:
     duration = f" in {run.duration_ms:,.0f} ms" if run.duration_ms is not None else ""
+    strategy = C.RUN_STRATEGY_LABELS.get(run.strategy, run.strategy)
     click.echo(
         f"Activated release {release.label!r} (id {release.id}, sequence {release.sequence}). "
-        f"Re-evaluation run #{run.id} ({C.RUN_STRATEGY_LABELS.get(run.strategy, run.strategy)}, {run.status}){duration}:"
+        f"Re-evaluation run #{run.id} ({strategy}, {run.status}){duration}:"
     )
     click.echo(
         f"  {run.stored_keys_compared:,} stored keys compared, {run.changed_variants:,} changed, "
