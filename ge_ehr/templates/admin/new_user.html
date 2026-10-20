@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% import "_macros.html" as ui %}
+{% block title %}New user{% endblock %}
+{% block content %}
+{{ ui.page_header("New user", "Create an account and assign its role. The creation is recorded in the audit log.", icon="person-plus") }}
+<div class="row">
+  <div class="col-lg-8 col-xl-7">
+    <div class="card">
+      <div class="card-body">
+        {{ ui.render_form_errors(form) }}
+        <form method="post" novalidate>
+          {{ form.hidden_tag() }}
+          <div class="row g-0 gx-md-3">
+            <div class="col-md-6">{{ ui.render_field(form.username) }}</div>
+            <div class="col-md-6">{{ ui.render_field(form.role) }}</div>
+          </div>
+          {{ ui.render_field(form.full_name) }}
+          {{ ui.render_field(form.email) }}
+          <hr class="form-divider">
+          <div class="row g-0 gx-md-3">
+            <div class="col-md-6">{{ ui.render_field(form.password) }}</div>
+            <div class="col-md-6">{{ ui.render_field(form.confirm_password) }}</div>
+          </div>
+          {{ ui.render_field(form.must_change_password) }}
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary"><i class="bi bi-person-plus" aria-hidden="true"></i> Create user</button>
+            <a class="btn btn-outline-secondary" href="{{ url_for('admin.users') }}">Cancel</a>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

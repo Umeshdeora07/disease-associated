@@ -1,0 +1,13 @@
+{#- Temporary page rendered by the placeholder blueprints until their work packages replace them. -#}
+{% extends "base.html" %}
+{% import "_macros.html" as ui %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+{{ ui.page_header(title) }}
+<div class="card">
+  <div class="card-body">
+    {{ ui.empty_state("cone-striped", "This page is being built",
+                      "This part of GE-EHR is delivered by the " ~ owner ~ " work package and is not available yet.") }}
+  </div>
+</div>
+{% endblock %}

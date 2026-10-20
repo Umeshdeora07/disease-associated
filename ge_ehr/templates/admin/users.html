@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% import "_macros.html" as ui %}
+{% block title %}Users{% endblock %}
+{% block content %}
+{% call ui.page_header("Users", "Accounts and roles. Deactivated accounts cannot sign in; every change is recorded in the audit log.", icon="person-gear") %}
+  <a class="btn btn-primary" href="{{ url_for('admin.new_user') }}"><i class="bi bi-person-plus" aria-hidden="true"></i> New user</a>
+{% endcall %}
+<div class="card card-table">
+  <div class="table-responsive">
+    <table class="table table-app table-hover align-middle">
+      <thead>
+        <tr>
+          <th scope="col">User</th>
+          <th scope="col">Role</th>
+          <th scope="col">Status</th>
+          <th scope="col" class="d-none d-md-table-cell">Last sign-in</th>
+          <th scope="col" class="d-none d-lg-table-cell">Created</th>
+          <th scope="col" class="text-end">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for user in pagination.items %}
+        {% set is_self = user.id == current_user.id %}
+        <tr>
+          <td>
+            <div class="fw-semibold">{{ user.full_name }}{% if is_self %} <span class="badge text-bg-light border">You</span>{% endif %}</div>
+            <div class="small text-body-secondary"><span class="font-monospace">{{ user.username }}</span>{% if user.email %} · {{ user.email }}{% endif %}</div>
+          </td>
+          <td>{{ ui.role_badge(user.role) }}</td>
+          <td>
+            <div class="d-flex flex-wrap gap-1">
+              {{ ui.status_badge("active" if user.active else "inactive") }}
+              {% if user.is_locked() %}{{ ui.status_badge("locked") }}{% endif %}
+              {% if user.must_change_password %}<span class="badge badge-status badge-status-open" title="Must choose a new password at next sign-in"><i class="bi bi-key" aria-hidden="true"></i>Password change due</span>{% endif %}
+            </div>
+          </td>
+          <td class="d-none d-md-table-cell text-nowrap">{{ user.last_login_at|dt }}</td>
+          <td class="d-none d-lg-table-cell text-nowrap">{{ user.created_at|date }}</td>
+          <td class="text-end">
+            <div class="table-actions">
+              {{ ui.confirm_button(url_for('admin.reset_password', user_id=user.id), "Reset password",
+                                   "Set a temporary password for " ~ user.username ~ "? Their current password stops working and other sessions are signed out.",
+                                   variant="outline-secondary", icon="key", confirm_label="Reset password", title="Reset password") }}
+              {% if not is_self %}
+                {% if user.active %}
+                {{ ui.confirm_button(url_for('admin.toggle_user', user_id=user.id), "Deactivate",
+                                     "Deactivate " ~ user.username ~ "? They will be signed out and cannot sign in until reactivated.",
+                                     variant="outline-danger", icon="person-x", confirm_label="Deactivate", title="Deactivate account") }}
+                {% else %}
+                {{ ui.confirm_button(url_for('admin.toggle_user', user_id=user.id), "Activate", variant="outline-primary", icon="person-check") }}
+                {% endif %}
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6">{{ ui.empty_state("people", "No users yet", "Create the first account with the New user button.") }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{ ui.pagination(pagination, "admin.users") }}
+{% endblock %}

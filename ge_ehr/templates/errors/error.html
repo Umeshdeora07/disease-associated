@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<div class="error-page">
+  <div class="error-icon error-icon-{{ 'server' if code >= 500 else 'client' }}" aria-hidden="true"><i class="bi bi-{{ icon }}"></i></div>
+  <p class="error-code">Error {{ code }}</p>
+  <h1 class="error-title">{{ title }}</h1>
+  <p class="error-message">{{ message }}</p>
+  <div class="error-actions">
+    {% if current_user.is_authenticated %}
+    <a class="btn btn-primary" href="{{ url_for('main.dashboard') }}"><i class="bi bi-speedometer2" aria-hidden="true"></i> Go to the dashboard</a>
+    {% else %}
+    <a class="btn btn-primary" href="{{ url_for('auth.login') }}"><i class="bi bi-box-arrow-in-right" aria-hidden="true"></i> Sign in</a>
+    {% endif %}
+    <a class="btn btn-outline-secondary" href="{{ url_for('main.dashboard') }}" data-history-back><i class="bi bi-arrow-left" aria-hidden="true"></i> Go back</a>
+  </div>
+</div>
+{% endblock %}

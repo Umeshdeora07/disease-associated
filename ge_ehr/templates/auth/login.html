@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% import "_macros.html" as ui %}
+{% block title %}Sign in{% endblock %}
+{% block body_class %}page-auth{% endblock %}
+{% block content %}
+<div class="auth-layout">
+  <section class="auth-intro" aria-labelledby="auth-intro-title">
+    <p class="auth-eyebrow">Genomic-Enhanced EHR</p>
+    <h1 class="auth-intro-title" id="auth-intro-title">Reclassification-aware decision support for monogenic diabetes</h1>
+    <ul class="auth-points">
+      <li>
+        <i class="bi bi-layers" aria-hidden="true"></i>
+        <span>Variants in seven genes (<span class="gene-symbol">GCK</span>, <span class="gene-symbol">HNF1A</span>,
+          <span class="gene-symbol">HNF4A</span>, <span class="gene-symbol">HNF1B</span>, <span class="gene-symbol">KCNJ11</span>,
+          <span class="gene-symbol">ABCC8</span>, <span class="gene-symbol">INS</span>) classified against versioned ClinVar releases.</span>
+      </li>
+      <li>
+        <i class="bi bi-capsule" aria-hidden="true"></i>
+        <span>Medication-aware rules compare the genetic diagnosis with the patient's current diabetes therapy.</span>
+      </li>
+      <li>
+        <i class="bi bi-arrow-repeat" aria-hidden="true"></i>
+        <span>Stored patients are re-evaluated when ClinVar or the rules change: upgrades re-alert, downgrades ask for review.</span>
+      </li>
+    </ul>
+  </section>
+
+  <div class="card auth-card">
+    <div class="card-body">
+      <img class="auth-logo" src="{{ url_for('static', filename='img/logo.svg') }}" width="48" height="48" alt="">
+      <h2 class="auth-title">Sign in</h2>
+      <p class="auth-subtitle">Use the account issued by your administrator.</p>
+      {% if login_error %}
+      <div class="alert alert-danger" role="alert">
+        <i class="bi bi-x-octagon-fill" aria-hidden="true"></i>
+        <div class="alert-body">{{ login_error }}</div>
+      </div>
+      {% endif %}
+      {{ ui.render_form_errors(form) }}
+      <form method="post" action="{{ url_for('auth.login', next=next_url) }}" novalidate>
+        {{ form.hidden_tag() }}
+        {{ ui.render_field(form.username) }}
+        {{ ui.render_field(form.password) }}
+        <button type="submit" class="btn btn-primary w-100 mt-2">
+          <i class="bi bi-box-arrow-in-right" aria-hidden="true"></i> Sign in
+        </button>
+      </form>
+    </div>
+  </div>
+</div>
+<p class="auth-footnote">
+  Research prototype with synthetic patients. Recommendations are advisory and phrased for specialist
+  review; GE-EHR never changes therapy itself.
+</p>
+{% endblock %}

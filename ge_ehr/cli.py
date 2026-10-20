@@ -12,12 +12,13 @@ import click
 from flask import Flask
 
 from . import models
-from .commands import register_commands
 from .extensions import db
 
 
 def register_cli(app: Flask) -> None:
     """Register every command group and the ``flask shell`` context."""
+    from .commands import register_commands  # the command modules import this module
+
     register_commands(app)
 
     @app.shell_context_processor

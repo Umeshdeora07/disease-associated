@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% import "_macros.html" as ui %}
+{% block title %}Audit log{% endblock %}
+{% block content %}
+{% set security_actions = ("login_failed", "account_locked", "access_denied", "vcf_upload_rejected", "password_change_failed") %}
+{{ ui.page_header("Audit log", "Security-relevant actions, newest first. Entries cannot be edited or deleted.", icon="clock-history") }}
+<form class="card filter-bar" method="get" action="{{ url_for('admin.audit') }}" role="search" aria-label="Filter audit log">
+  <div class="card-body">
+    <div class="row g-2 align-items-end">
+      <div class="col-sm-6 col-md-4">
+        <label class="form-label" for="filter-action">Action</label>
+        <select class="form-select" id="filter-action" name="action" data-autosubmit>
+          <option value="">All actions</option>
+          {% for action in actions %}<option value="{{ action }}"{% if action == filters.action %} selected{% endif %}>{{ action }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="col-sm-6 col-md-4">
+        <label class="form-label" for="filter-user">User</label>
+        <select class="form-select" id="filter-user" name="user" data-autosubmit>
+          <option value="">All users</option>
+          {% for username in usernames %}<option value="{{ username }}"{% if username == filters.user %} selected{% endif %}>{{ username }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="col-md-4 d-flex gap-2">
+        <button type="submit" class="btn btn-primary"><i class="bi bi-funnel" aria-hidden="true"></i> Apply</button>
+        {% if filters.action or filters.user %}<a class="btn btn-outline-secondary" href="{{ url_for('admin.audit') }}">Clear</a>{% endif %}
+      </div>
+    </div>
+  </div>
+</form>
+<div class="card card-table">
+  <div class="table-responsive">
+    <table class="table table-app align-middle">
+      <thead>
+        <tr>
+          <th scope="col">When</th>
+          <th scope="col">User</th>
+          <th scope="col">Action</th>
+          <th scope="col" class="d-none d-md-table-cell">Entity</th>
+          <th scope="col">Detail</th>
+          <th scope="col" class="d-none d-lg-table-cell">IP address</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for entry in pagination.items %}
+        <tr>
+          <td class="text-nowrap">{{ entry.at|dt }}</td>
+          <td>{% if entry.username %}<span class="font-monospace">{{ entry.username }}</span>{% else %}<span class="text-body-secondary">anonymous</span>{% endif %}</td>
+          <td><span class="badge audit-action{% if entry.action in security_actions %} audit-action-security{% endif %}">{{ entry.action }}</span></td>
+          <td class="d-none d-md-table-cell text-nowrap">{% if entry.entity_type %}{{ entry.entity_type }}{% if entry.entity_id is not none %} #{{ entry.entity_id }}{% endif %}{% else %}<span class="text-body-secondary">—</span>{% endif %}</td>
+          <td class="audit-detail">
+            {%- if entry.detail %}{% for key, value in entry.detail|dictsort %}<span class="audit-kv"><span class="audit-k">{{ key }}</span> {{ value }}</span>{% endfor %}
+            {%- else %}<span class="text-body-secondary">—</span>{% endif -%}
+          </td>
+          <td class="d-none d-lg-table-cell font-monospace small">{{ entry.ip_address or "—" }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6">{{ ui.empty_state("clock-history", "No audit entries", "No entries match the selected filters." if (filters.action or filters.user) else "Actions such as sign-ins and imports will appear here.") }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{ ui.pagination(pagination, "admin.audit", action=filters.action, user=filters.user) }}
+{% endblock %}

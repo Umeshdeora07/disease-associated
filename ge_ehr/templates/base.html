@@ -1,0 +1,190 @@
+{#- Base layout. Blocks: title, head, body_class, content, scripts.
+    No inline scripts or styles anywhere: the CSP is default-src 'self'. -#}
+{%- macro nav_item(endpoint, label, icon, active=false, badge=none, badge_class="nav-badge", badge_label="") -%}
+<li class="nav-item">
+  <a class="nav-link{% if active %} active{% endif %}" href="{{ url_for(endpoint) }}"{% if active %} aria-current="page"{% endif %}>
+    <i class="bi bi-{{ icon }}" aria-hidden="true"></i><span>{{ label }}</span>
+    {%- if badge %}<span class="badge rounded-pill {{ badge_class }}">{{ badge }}<span class="visually-hidden"> {{ badge_label }}</span></span>{% endif %}
+  </a>
+</li>
+{%- endmacro -%}
+{%- set flash_styles = {
+  "success": ("success", "check-circle-fill"),
+  "info": ("info", "info-circle-fill"),
+  "message": ("info", "info-circle-fill"),
+  "warning": ("warning", "exclamation-triangle-fill"),
+  "danger": ("danger", "x-octagon-fill"),
+  "error": ("danger", "x-octagon-fill"),
+  "credential": ("warning", "key-fill"),
+} -%}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>{% block title %}{{ title|default("GE-EHR") }}{% endblock %} · GE-EHR</title>
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='img/logo.svg') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='vendor/bootstrap/css/bootstrap.min.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='vendor/bootstrap-icons/bootstrap-icons.min.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+  {% block head %}{% endblock %}
+</head>
+<body class="{% block body_class %}{% endblock %}">
+<a class="skip-link" href="#main-content">Skip to main content</a>
+
+<header class="app-header sticky-top">
+  <nav class="navbar navbar-expand-lg navbar-dark app-navbar" aria-label="Main navigation">
+    <div class="container-xl">
+      <a class="navbar-brand" href="{{ url_for('main.dashboard') if current_user.is_authenticated else url_for('auth.login') }}">
+        <img class="brand-logo" src="{{ url_for('static', filename='img/logo.svg') }}" width="30" height="30" alt="">
+        <span class="brand-text">GE-EHR<span class="brand-sep" aria-hidden="true"> · </span><span class="brand-sub">Monogenic Diabetes</span></span>
+      </a>
+      {% if current_user.is_authenticated %}
+      <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#main-nav"
+              aria-controls="main-nav" aria-expanded="false" aria-label="Toggle navigation">
+        <span class="navbar-toggler-icon"></span>
+      </button>
+      <div class="collapse navbar-collapse" id="main-nav">
+        <ul class="navbar-nav me-auto">
+          {{ nav_item("main.dashboard", "Dashboard", "speedometer2", active=request.endpoint == "main.dashboard") }}
+          {{ nav_item("patients.list_patients", "Patients", "people", active=request.blueprint == "patients") }}
+          {% if is_clinical %}
+          {{ nav_item("alerts.inbox", "Alerts", "bell", active=request.endpoint in ("alerts.inbox", "alerts.view_alert"),
+                      badge=nav_counts.alerts if nav_counts else none, badge_class="nav-badge nav-badge-alerts",
+                      badge_label="active high or medium alerts") }}
+          {{ nav_item("alerts.notices", "Review notices", "clipboard2-pulse", active=request.endpoint == "alerts.notices",
+                      badge=nav_counts.notices if nav_counts else none, badge_class="nav-badge nav-badge-notices",
+                      badge_label="open review notices") }}
+          <li class="nav-item dropdown">
+            <a class="nav-link dropdown-toggle{% if request.blueprint == 'knowledge' %} active{% endif %}" href="#" role="button"
+               data-bs-toggle="dropdown" aria-expanded="false">
+              <i class="bi bi-database" aria-hidden="true"></i><span>Knowledge</span>
+            </a>
+            <ul class="dropdown-menu">
+              <li><a class="dropdown-item" href="{{ url_for('knowledge.releases') }}"><i class="bi bi-layers" aria-hidden="true"></i> ClinVar releases</a></li>
+              <li><a class="dropdown-item" href="{{ url_for('knowledge.compare_releases') }}"><i class="bi bi-arrow-left-right" aria-hidden="true"></i> Compare releases</a></li>
+              <li><a class="dropdown-item" href="{{ url_for('knowledge.rules') }}"><i class="bi bi-journal-medical" aria-hidden="true"></i> Decision rules</a></li>
+              <li><a class="dropdown-item" href="{{ url_for('knowledge.runs') }}"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Re-evaluation runs</a></li>
+              {% if is_admin %}
+              <li><hr class="dropdown-divider"></li>
+              <li><h6 class="dropdown-header">Administration</h6></li>
+              <li><a class="dropdown-item" href="{{ url_for('knowledge.import_release') }}"><i class="bi bi-upload" aria-hidden="true"></i> Import release</a></li>
+              <li><a class="dropdown-item" href="{{ url_for('knowledge.import_rules') }}"><i class="bi bi-journal-plus" aria-hidden="true"></i> Import rules</a></li>
+              {% endif %}
+            </ul>
+          </li>
+          {% endif %}
+          {% if is_admin %}
+          <li class="nav-item dropdown">
+            <a class="nav-link dropdown-toggle{% if request.blueprint == 'admin' %} active{% endif %}" href="#" role="button"
+               data-bs-toggle="dropdown" aria-expanded="false">
+              <i class="bi bi-gear" aria-hidden="true"></i><span>Admin</span>
+            </a>
+            <ul class="dropdown-menu">
+              <li><a class="dropdown-item" href="{{ url_for('admin.users') }}"><i class="bi bi-person-gear" aria-hidden="true"></i> Users</a></li>
+              <li><a class="dropdown-item" href="{{ url_for('admin.audit') }}"><i class="bi bi-clock-history" aria-hidden="true"></i> Audit log</a></li>
+            </ul>
+          </li>
+          {% endif %}
+        </ul>
+        <ul class="navbar-nav align-items-lg-center gap-lg-2">
+          {% if is_clinical %}
+          <li class="nav-item">
+            {% if current_release %}
+            <a class="release-pill" href="{{ url_for('knowledge.view_release', release_id=current_release.id) }}"
+               title="Current knowledge-base release">
+              <i class="bi bi-layers-fill" aria-hidden="true"></i><span class="visually-hidden">Current release: </span>{{ current_release.label }}
+            </a>
+            {% else %}
+            <a class="release-pill release-pill-none" href="{{ url_for('knowledge.releases') }}">
+              <i class="bi bi-exclamation-circle" aria-hidden="true"></i> No active release
+            </a>
+            {% endif %}
+          </li>
+          {% endif %}
+          <li class="nav-item dropdown">
+            <a class="nav-link dropdown-toggle user-menu-toggle" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+              <i class="bi bi-person-circle" aria-hidden="true"></i><span class="user-menu-name">{{ current_user.full_name }}</span>
+            </a>
+            <ul class="dropdown-menu dropdown-menu-end user-menu">
+              <li class="user-menu-header">
+                <div class="fw-semibold">{{ current_user.full_name }}</div>
+                <div class="small text-body-secondary font-monospace">{{ current_user.username }}</div>
+                <span class="badge badge-role badge-role-{{ current_user.role }} mt-2">{{ current_user.role|role_label }}</span>
+              </li>
+              <li><hr class="dropdown-divider"></li>
+              <li><a class="dropdown-item" href="{{ url_for('auth.change_password') }}"><i class="bi bi-key" aria-hidden="true"></i> Change password</a></li>
+              <li>
+                <form method="post" action="{{ url_for('auth.logout') }}" class="m-0">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <button type="submit" class="dropdown-item"><i class="bi bi-box-arrow-right" aria-hidden="true"></i> Sign out</button>
+                </form>
+              </li>
+            </ul>
+          </li>
+        </ul>
+      </div>
+      {% else %}
+      <a class="nav-link navbar-about-link" href="{{ url_for('main.about') }}"><i class="bi bi-info-circle" aria-hidden="true"></i> About</a>
+      {% endif %}
+    </div>
+  </nav>
+  <div class="synthetic-banner" role="note">
+    <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+    <span>{{ synthetic_notice }}</span>
+  </div>
+</header>
+
+<main id="main-content" class="app-main" tabindex="-1">
+  <div class="container-xl">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-stack" aria-live="polite">
+      {% for category, message in messages %}
+      {% set style, icon = flash_styles.get(category, ("info", "info-circle-fill")) %}
+      <div class="alert alert-{{ style }} alert-dismissible fade show{% if category == 'credential' %} alert-credential{% endif %}"
+           role="{{ 'alert' if style in ('warning', 'danger') else 'status' }}"{% if category == 'success' %} data-autodismiss="6000"{% endif %}>
+        <i class="bi bi-{{ icon }}" aria-hidden="true"></i>
+        <div class="alert-body">{{ message }}</div>
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Dismiss"></button>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+  </div>
+</main>
+
+<footer class="app-footer">
+  <div class="container-xl app-footer-inner">
+    <div><strong>GE-EHR</strong> v{{ app_version }} · Advisory decision support — for specialist review</div>
+    <div class="app-footer-meta">
+      {% if is_clinical and current_release %}<span>Knowledge base: {{ current_release.label }}</span><span aria-hidden="true"> · </span>{% endif %}
+      <a href="{{ url_for('main.about') }}">About this prototype</a><span aria-hidden="true"> · </span><span>Synthetic data only</span>
+    </div>
+  </div>
+</footer>
+
+<div class="modal fade" id="confirm-modal" tabindex="-1" aria-labelledby="confirm-modal-title" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2 class="modal-title fs-5" id="confirm-modal-title" data-confirm-title>Please confirm</h2>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cancel"></button>
+      </div>
+      <div class="modal-body"><p class="mb-0" data-confirm-message></p></div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary" data-confirm-accept>Confirm</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="{{ url_for('static', filename='vendor/bootstrap/js/bootstrap.bundle.min.js') }}"></script>
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

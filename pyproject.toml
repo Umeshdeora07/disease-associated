@@ -45,6 +45,7 @@ ge_ehr = ["templates/**/*", "static/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 addopts = "-ra --strict-markers"
 markers = [
     "slow: long-running tests (large cohorts, real ClinVar files); deselect with '-m \"not slow\"'",
