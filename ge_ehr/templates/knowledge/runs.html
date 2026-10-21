@@ -1,0 +1,115 @@
+{#- Re-evaluation runs: every logged run with its knowledge change, work and outcome counters. -#}
+{% extends "base.html" %}
+{% import "_macros.html" as ui %}
+{% import "knowledge/_kb_macros.html" as kb with context %}
+{% block title %}Re-evaluation runs{% endblock %}
+{% block content %}
+{% call ui.page_header("Re-evaluation runs",
+    "Every release activation, rule revision and full recomputation is logged with the work it did and what it changed.",
+    icon="arrow-repeat") %}
+  {% if is_admin %}
+  {{ ui.confirm_button(url_for('knowledge.recompute'), "Full recomputation", variant="outline-primary", size=none, icon="arrow-repeat",
+       title="Full recomputation",
+       message="Re-evaluate every patient against the current release and rules? In a consistent database this changes no alert and only refreshes provenance.",
+       confirm_label="Recompute all patients") }}
+  {% endif %}
+{% endcall %}
+
+<form class="card filter-bar" method="get" action="{{ url_for('knowledge.runs') }}" aria-label="Filter runs">
+  <div class="card-body">
+    <div class="row g-2 align-items-end">
+      <div class="col-6 col-md-4 col-lg-3">
+        <label class="form-label" for="filter-trigger">Trigger</label>
+        <select class="form-select" id="filter-trigger" name="trigger" data-autosubmit>
+          <option value="">All triggers</option>
+          {% for trigger in ("clinvar_release", "rule_revision", "full_recompute", "manual") %}<option value="{{ trigger }}"{% if trigger == filters.trigger %} selected{% endif %}>{{ trigger|trigger_label }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="col-6 col-md-4 col-lg-3">
+        <label class="form-label" for="filter-status">Status</label>
+        <select class="form-select" id="filter-status" name="status" data-autosubmit>
+          <option value="">All statuses</option>
+          {% for status in C.RUN_STATUSES %}<option value="{{ status }}"{% if status == filters.status %} selected{% endif %}>{{ status|humanize }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="col-12 col-md-4 col-lg-6 d-flex gap-2 justify-content-md-end">
+        <button type="submit" class="btn btn-primary"><i class="bi bi-funnel" aria-hidden="true"></i> Apply</button>
+        {% if filters.trigger or filters.status %}<a class="btn btn-outline-secondary" href="{{ url_for('knowledge.runs') }}">Clear</a>{% endif %}
+      </div>
+    </div>
+  </div>
+</form>
+
+<div class="card card-table">
+  <div class="table-responsive">
+    <table class="table table-app align-middle run-table">
+      <thead>
+        <tr>
+          <th scope="col">Run</th>
+          <th scope="col">Knowledge change</th>
+          <th scope="col" class="d-none d-lg-table-cell">Work</th>
+          <th scope="col">Outcome</th>
+          <th scope="col" class="d-none d-md-table-cell text-end">Duration</th>
+          <th scope="col" class="d-none d-sm-table-cell">Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for run in pagination.items %}
+        <tr{% if run.status == "failed" %} class="row-failed"{% endif %}>
+          <td class="run-cell">
+            {{ kb.run_link(run) }}
+            <div>{{ kb.trigger_label(run.trigger) }}</div>
+            <div class="small text-body-secondary text-nowrap">{{ run.started_at|dt }}</div>
+            <div class="small text-body-secondary">{{ run.strategy|strategy_label }} · {{ run.initiated_by.full_name if run.initiated_by else "System" }}</div>
+            <div class="d-sm-none mt-1">{{ ui.status_badge(run.status) }}</div>
+          </td>
+          <td>
+            {% if run.trigger == "clinvar_release" %}
+            <div class="release-transition">{{ kb.release_link(run.old_release, empty="None") }} <i class="bi bi-arrow-right" aria-hidden="true"></i><span class="visually-hidden">to</span> {{ kb.release_link(run.new_release) }}</div>
+            {% elif run.trigger == "rule_revision" %}
+            <div class="version-chip-row">{{ kb.rule_changes(run.rule_change or []) }}</div>
+            <div class="small text-body-secondary">under {{ kb.release_link(run.new_release) }}</div>
+            {% else %}
+            <div>All patients under {{ kb.release_link(run.new_release) }}</div>
+            {% endif %}
+          </td>
+          <td class="d-none d-lg-table-cell">
+            <dl class="counter-list">
+              {% if run.trigger == "clinvar_release" %}<div><dt>Keys compared</dt><dd>{{ run.stored_keys_compared|number }}</dd></div>
+              <div><dt>Changed</dt><dd>{{ run.changed_variants|number }}</dd></div>{% endif %}
+              <div><dt>Carriers</dt><dd>{{ run.carriers_affected|number }}</dd></div>
+              <div><dt>Patients</dt><dd>{{ run.patients_reevaluated|number }}</dd></div>
+              <div><dt>Records</dt><dd>{{ run.records_examined|number }}</dd></div>
+            </dl>
+          </td>
+          <td>
+            {% if run.status == "failed" %}
+            <span class="small text-danger-emphasis">No change applied</span>
+            {% else %}
+            <dl class="counter-list counter-list-outcome">
+              <div><dt>Created</dt><dd>{{ (run.alerts_created + run.notes_created)|number }}</dd></div>
+              <div><dt>Superseded</dt><dd>{{ run.alerts_superseded|number }}</dd></div>
+              <div><dt>Confirmed</dt><dd>{{ run.alerts_confirmed|number }}</dd></div>
+              <div{% if run.review_notices %} class="is-notable"{% endif %}><dt>Notices</dt><dd>{{ run.review_notices|number }}</dd></div>
+              <div{% if run.notifications %} class="is-notable"{% endif %}><dt>Notified</dt><dd>{{ run.notifications|number }}</dd></div>
+            </dl>
+            {% endif %}
+          </td>
+          <td class="d-none d-md-table-cell text-end text-nowrap num">{{ run.duration_ms|duration_ms }}</td>
+          <td class="d-none d-sm-table-cell">{{ ui.status_badge(run.status) }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6">
+          {% if filters.trigger or filters.status %}
+          {% call ui.empty_state("funnel", "No run matches these filters") %}<a class="btn btn-outline-secondary" href="{{ url_for('knowledge.runs') }}">Clear filters</a>{% endcall %}
+          {% else %}
+          {{ ui.empty_state("arrow-repeat", "No re-evaluation run yet", "A run is logged whenever a release is activated, a rule set is imported or a full recomputation is started.") }}
+          {% endif %}
+        </td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{ ui.pagination(pagination, "knowledge.runs", trigger=filters.trigger, status=filters.status) }}
+{% endblock %}

@@ -32,7 +32,10 @@ LIVE_DEMO_STEPS: tuple[tuple[str, str], ...] = (
     ),
     (
         "Knowledge base → Releases → import data/demo/clinvar/demo_release_2.vcf.gz with 'activate and re-evaluate'",
-        "Reclassifications RS1–RS4 and RS6; V11 is carried by nobody, so it is never examined (RS7).",
+        (
+            f"Label it '{RELEASE_2_LABEL}'. Reclassifications RS1–RS4 and RS6; V11 is carried by nobody, "
+            "so it is never examined (RS7)."
+        ),
     ),
 )
 

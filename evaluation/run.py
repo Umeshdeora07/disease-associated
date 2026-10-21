@@ -29,6 +29,7 @@ import sqlite3
 import statistics
 import sys
 import tempfile
+from collections import Counter
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -266,7 +267,7 @@ def evaluate_cohort(
 
     runs: dict[str, list[StrategyOutcome]] = {strategy: [] for strategy in STRATEGIES}
     for repeat in range(repeats):
-        order = STRATEGIES[repeat % len(STRATEGIES):] + STRATEGIES[: repeat % len(STRATEGIES)]
+        order = STRATEGIES[repeat % len(STRATEGIES) :] + STRATEGIES[: repeat % len(STRATEGIES)]
         for strategy in order:
             logger.info("%s cohort, run %d/%d: %s", plan.name, repeat + 1, repeats, STRATEGY_LABELS[strategy])
             runs[strategy].append(
@@ -289,7 +290,9 @@ def evaluate_cohort(
         entry: dict[str, Any] = {
             "label": STRATEGY_LABELS[strategy],
             "release": {
-                **metrics.change_metrics(first.release, before=truth_initial, after=truth_release, realert_pairs=release_pairs),
+                **metrics.change_metrics(
+                    first.release, before=truth_initial, after=truth_release, realert_pairs=release_pairs
+                ),
                 "delta": metrics.delta_check(first.release, plan, changes),
                 "timing_ms": _timing([outcome.release.duration_ms for outcome in outcomes]),
             },
@@ -342,15 +345,8 @@ def _truth_counts(findings: frozenset[strategies.FindingId]) -> dict[str, Any]:
         "findings": len(findings),
         "alerts": len(alerts),
         "notes": len(findings) - len(alerts),
-        "alerts_by_rule": dict(sorted(_count(finding.rule_code for finding in alerts).items())),
+        "alerts_by_rule": dict(sorted(Counter(finding.rule_code for finding in alerts).items())),
     }
-
-
-def _count(values: Any) -> dict[str, int]:
-    counts: dict[str, int] = {}
-    for value in values:
-        counts[value] = counts.get(value, 0) + 1
-    return counts
 
 
 def _scaled(counts: Mapping[str, int], kb_size: int) -> dict[str, int]:
@@ -428,6 +424,7 @@ def evaluate_synthetic(
             "rule_revision": "D4 v1 (KCNJ11) → D4 v2 (KCNJ11 or ABCC8), rules v1 → v2",
         },
         "cohorts": cohorts,
+        "table_vi_expectations": table_vi_expectations(cohorts["scale"], cohorts["correctness"]),
     }
 
 
@@ -463,13 +460,30 @@ def evaluate_real_pair(
         new_date=pair.new_date,
     )
     result = evaluate_cohort(
-        plan, files, old, new, changes, work, ingest="bulk", repeats=options.repeats, as_of_scope="alerted", scenarios=False
+        plan,
+        files,
+        old,
+        new,
+        changes,
+        work,
+        ingest="bulk",
+        repeats=options.repeats,
+        as_of_scope="alerted",
+        scenarios=False,
     )
     return {
         "status": "evaluated",
         "releases": {
-            "old": {"file": pair.old_path.name, "sha256": file_sha256(pair.old_path), **knowledge.release_summary(old_records)},
-            "new": {"file": pair.new_path.name, "sha256": file_sha256(pair.new_path), **knowledge.release_summary(new_records)},
+            "old": {
+                "file": pair.old_path.name,
+                "sha256": file_sha256(pair.old_path),
+                **knowledge.release_summary(old_records),
+            },
+            "new": {
+                "file": pair.new_path.name,
+                "sha256": file_sha256(pair.new_path),
+                **knowledge.release_summary(new_records),
+            },
         },
         "changes": knowledge.summarize_changes(changes),
         "cohort": result,
@@ -485,7 +499,11 @@ def run_evaluation(options: Options) -> dict[str, Any]:
     with _work_directory(options.work_dir) as work:
         synthetic = evaluate_synthetic(options, correctness, scale, work)
         if pair is None:
-            real: dict[str, Any] = {"status": "pending", "reason": REAL_PAIR_PENDING, "directory": _display_path(options.real_dir)}
+            real: dict[str, Any] = {
+                "status": "pending",
+                "reason": REAL_PAIR_PENDING,
+                "directory": _display_path(options.real_dir),
+            }
         else:
             real = evaluate_real_pair(pair, options, scale, work)
     return {
@@ -560,15 +578,18 @@ def _stale(metric: Mapping[str, Any]) -> str:
     stale, affected = metric["stale_alerts"], metric["affected_alerts"]
     if stale == 0:
         return "0"
-    return f"{stale:,} ({stale:,} of {affected:,} affected)" if stale == affected else f"{stale:,} ({affected:,} affected)"
+    return (
+        f"{stale:,} ({stale:,} of {affected:,} affected)" if stale == affected else f"{stale:,} ({affected:,} affected)"
+    )
 
 
-def _records(metric: Mapping[str, Any], strategy: str, total_records: int) -> str:
+def _records(metric: Mapping[str, Any], strategy: str, total_records: int, scope: str = "changed only") -> str:
+    """Records examined; ``scope`` describes what the change-driven strategy restricts itself to."""
     records = metric["records_examined"]
     if strategy == "full":
         return f"{records:,} (all {total_records:,})" if records == total_records else f"{records:,}"
     if strategy == "change_driven":
-        return f"{records:,} (changed only)"
+        return f"{records:,} ({scope})"
     return f"{records:,}"
 
 
@@ -625,23 +646,40 @@ def _rule_table(cohort: Mapping[str, Any], repeats: int) -> list[str]:
     entries = cohort["strategies"]
     total = cohort["baseline"]["counts"]["patient_variants"]
     rows = [
-        ["Newly indicated alerts raised", *(_ratio(entries[s]["rule_revision"]["re_alert_sensitivity"]) for s in STRATEGIES)],
+        [
+            "Newly indicated alerts raised",
+            *(_ratio(entries[s]["rule_revision"]["re_alert_sensitivity"]) for s in STRATEGIES),
+        ],
         ["Stale alerts after revision", *(_number(entries[s]["rule_revision"]["stale_alerts"]) for s in STRATEGIES)],
         ["Missed alerts after revision", *(_number(entries[s]["rule_revision"]["missed_alerts"]) for s in STRATEGIES)],
         ["Notification precision", *(_precision(entries[s]["rule_revision"]) for s in STRATEGIES)],
         ["Notification recall", *(_ratio(entries[s]["rule_revision"]["notification_recall"]) for s in STRATEGIES)],
-        ["Records examined", *(_records(entries[s]["rule_revision"], s, total) for s in STRATEGIES)],
-        ["Time per revision" + (f", median [min–max] of {repeats}" if repeats > 1 else ""),
-         *(_ms(entries[s]["rule_revision"]["timing_ms"], repeats) for s in STRATEGIES)],
-        ["`alerts_as_of` reproduces the pre-revision state", *(_as_of(entries[s], "before_rule_revision") for s in STRATEGIES)],
-        ["Final state equals ground truth", *(_yes(entries[s]["rule_revision"]["final_state_matches_ground_truth"]) for s in STRATEGIES)],
+        [
+            "Records examined",
+            *(
+                _records(entries[s]["rule_revision"], s, total, "carriers of the revised rule's genes")
+                for s in STRATEGIES
+            ),
+        ],
+        [
+            "Time per revision" + (f", median [min–max] of {repeats}" if repeats > 1 else ""),
+            *(_ms(entries[s]["rule_revision"]["timing_ms"], repeats) for s in STRATEGIES),
+        ],
+        [
+            "`alerts_as_of` reproduces the pre-revision state",
+            *(_as_of(entries[s], "before_rule_revision") for s in STRATEGIES),
+        ],
+        [
+            "Final state equals ground truth",
+            *(_yes(entries[s]["rule_revision"]["final_state_matches_ground_truth"]) for s in STRATEGIES),
+        ],
     ]
     return _table(["Metric", *(STRATEGY_LABELS[strategy] for strategy in STRATEGIES)], rows)
 
 
 def _category_table(cohort: Mapping[str, Any]) -> list[str]:
     rows = []
-    for name, row in cohort["categories"].items():
+    for row in cohort["categories"].values():
         cells = [
             row["label"],
             _number(row["carried_keys"]),
@@ -658,13 +696,23 @@ def _category_table(cohort: Mapping[str, Any]) -> list[str]:
                 f"notifications {observed['correct_notifications']}/{observed['notifications']} correct"
             )
         rows.append(cells)
-    header = ["Change category", "Carried keys", "Carrier pairs", "Expected new alerts", "Expected removed alerts",
-              "Expected notifications", *(STRATEGY_LABELS[strategy] for strategy in STRATEGIES)]
+    header = [
+        "Change category",
+        "Carried keys",
+        "Carrier pairs",
+        "Expected new alerts",
+        "Expected removed alerts",
+        "Expected notifications",
+        *(STRATEGY_LABELS[strategy] for strategy in STRATEGIES),
+    ]
     return _table(header, rows)
 
 
 def _scenario_table(correctness: Mapping[str, Any]) -> list[str]:
-    checks = {strategy: {check["code"]: check for check in correctness["strategies"][strategy]["scenarios"]} for strategy in STRATEGIES}
+    checks = {
+        strategy: {check["code"]: check for check in correctness["strategies"][strategy]["scenarios"]}
+        for strategy in STRATEGIES
+    }
     rows = []
     for code, (scenario, expected) in metrics.TABLE_V.items():
         cells = [code, scenario, expected]
@@ -687,14 +735,21 @@ def _knowledge_section(synthetic: Mapping[str, Any]) -> list[str]:
         "",
         *_table(
             ["Gene", *C.GENES],
-            [["K_old records", *(_number(base["genes"][gene]) for gene in C.GENES)],
-             ["Expert-panel records", *(_number(base["expert_panel_by_gene"][gene]) for gene in C.GENES)]],
+            [
+                ["K_old records", *(_number(base["genes"][gene]) for gene in C.GENES)],
+                ["Expert-panel records", *(_number(base["expert_panel_by_gene"][gene]) for gene in C.GENES)],
+            ],
         ),
         "",
-        *_table(["Class", *C.CLASSES], [["K_old records", *(_number(base["classes"][cls]) for cls in C.CLASSES)],
-                                         ["K_new records", *(_number(new["classes"][cls]) for cls in C.CLASSES)]]),
+        *_table(
+            ["Class", *C.CLASSES],
+            [
+                ["K_old records", *(_number(base["classes"][cls]) for cls in C.CLASSES)],
+                ["K_new records", *(_number(new["classes"][cls]) for cls in C.CLASSES)],
+            ],
+        ),
         "",
-        f"KCNJ11/ABCC8 classified records by inferred mechanism (K_old): "
+        "KCNJ11/ABCC8 classified records by inferred mechanism (K_old): "
         + ", ".join(f"{name} {count:,}" for name, count in base["katp_mechanisms"].items())
         + ". Raw `Conflicting_*` significances (both wordings) are normalised to VUS.",
         "",
@@ -704,7 +759,10 @@ def _knowledge_section(synthetic: Mapping[str, Any]) -> list[str]:
     kinds = kb["change_set"]["kinds"]
     lines += _table(
         ["Change", "Category", "Carried", "Carried by nobody"],
-        [[kind["label"], kind["group"].replace("_", " "), _number(kind["carried"]), _number(kind["uncarried"])] for kind in kinds.values()],
+        [
+            [kind["label"], kind["group"].replace("_", " "), _number(kind["carried"]), _number(kind["uncarried"])]
+            for kind in kinds.values()
+        ],
     )
     lines += [
         "",
@@ -719,41 +777,142 @@ def _cohort_section(name: str, cohort: Mapping[str, Any]) -> list[str]:
     summary, baseline = cohort["cohort"], cohort["baseline"]
     initial = baseline["initial_state_vs_ground_truth"]
     timings = ", ".join(f"{key.replace('_', ' ')} {value:,.0f} ms" for key, value in baseline["timings_ms"].items())
+    loaded = "VCF upload (F1)" if baseline["ingest"] == "vcf" else "bulk insert + first activation of K_old"
     return [
         f"**{name}:** {summary['patients']:,} patients ({summary['families']} families, "
-        f"{summary['patients_in_families']} patients in families), {summary['carriers_of_selected_variants']:,} carriers "
-        f"of {summary['selected_keys']:,} selected variants, {summary['patient_variant_records']:,} patient-variant records "
-        f"over {summary['distinct_panel_keys']:,} distinct keys; {summary['overrides']:,} clinical overrides on "
-        f"{summary['patients_with_overrides']:,} patients (listed in `results.json`). Loaded via "
-        f"{'VCF upload (F1)' if baseline['ingest'] == 'vcf' else 'bulk insert + first activation of K_old'} — {timings}. "
+        f"{summary['patients_in_families']} patients in families), "
+        f"{summary['carriers_of_selected_variants']:,} carriers of {summary['selected_keys']:,} selected variants, "
+        f"{summary['patient_variant_records']:,} patient-variant records over {summary['distinct_panel_keys']:,} "
+        f"distinct keys; {summary['overrides']:,} clinical overrides on {summary['patients_with_overrides']:,} "
+        f"patients (listed in `results.json`). Loaded via {loaded} — {timings}. "
         f"Initial state equals the ground truth under K_old + rules v1: {_yes(initial['matches'])} "
         f"({initial['findings']:,} findings).",
         "",
     ]
 
 
-def _expectations(cohort: Mapping[str, Any], correctness: Mapping[str, Any]) -> list[str]:
-    """Compare the measurements with the expected outcomes of paper Table VI."""
-    entries = cohort["strategies"]
-    alert_once, full, change = entries["alert_once"]["release"], entries["full"]["release"], entries["change_driven"]["release"]
-    checks = [
-        ("alert-once re-alert sensitivity 0 %", alert_once["re_alert_sensitivity"]["numerator"] == 0),
-        ("alert-once leaves every affected alert stale", alert_once["stale_alerts"] == alert_once["affected_alerts"]),
-        ("full and GE-EHR re-alert sensitivity 100 %",
-         all(entry["re_alert_sensitivity"]["value"] == 1.0 for entry in (full, change))),
-        ("full and GE-EHR leave 0 stale alerts", full["stale_alerts"] == 0 and change["stale_alerts"] == 0),
-        ("full and GE-EHR notification precision 100 %",
-         all(entry["notification_precision"]["value"] == 1.0 for entry in (full, change))),
-        ("GE-EHR examines fewer records than full", change["records_examined"] < full["records_examined"]),
-        ("GE-EHR is faster than full (median)", change["timing_ms"]["median"] < full["timing_ms"]["median"]),
-        ("GE-EHR and full reach the same final state",
-         entries["full"]["release"]["final_state_matches_ground_truth"] and change["final_state_matches_ground_truth"]),
-        ("point-in-time correctness 100 % for every strategy",
-         all(correctness["strategies"][s]["point_in_time_correctness"]["value"] == 1.0 for s in STRATEGIES)),
+def table_vi_expectations(cohort: Mapping[str, Any], correctness: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """The expected outcomes of paper Table VI per strategy, with the measured value and whether it is met.
+
+    ``cohort`` is the scale cohort's results (release change), ``correctness`` the correctness
+    cohort's (point-in-time scenarios). "Changed only" means change-driven re-evaluation examined
+    exactly the patient-variant records of the changed stored keys (and fewer than full).
+    """
+    release = {strategy: cohort["strategies"][strategy]["release"] for strategy in STRATEGIES}
+    alert_once, full, change = release["alert_once"], release["full"], release["change_driven"]
+    total = cohort["baseline"]["counts"]["patient_variants"]
+    point = {strategy: correctness["strategies"][strategy]["point_in_time_correctness"] for strategy in STRATEGIES}
+    sensitivity = {strategy: metric["re_alert_sensitivity"] for strategy, metric in release.items()}
+    precision = {strategy: metric["notification_precision"] for strategy, metric in release.items()}
+    changed = change["delta"]
+    rows: list[tuple[str, str, str, str, bool]] = [
+        (
+            "Re-alert sensitivity",
+            "alert_once",
+            "0 %",
+            _ratio(sensitivity["alert_once"]),
+            sensitivity["alert_once"]["numerator"] == 0 < sensitivity["alert_once"]["denominator"],
+        ),
+        *(
+            (
+                "Re-alert sensitivity",
+                strategy,
+                "100 %",
+                _ratio(sensitivity[strategy]),
+                sensitivity[strategy]["value"] == 1.0,
+            )
+            for strategy in ("full", "change_driven")
+        ),
+        (
+            "Stale alerts after release",
+            "alert_once",
+            "all affected",
+            _stale(alert_once),
+            alert_once["stale_alerts"] == alert_once["affected_alerts"] > 0,
+        ),
+        *(
+            (
+                "Stale alerts after release",
+                strategy,
+                "0",
+                _stale(release[strategy]),
+                release[strategy]["stale_alerts"] == 0,
+            )
+            for strategy in ("full", "change_driven")
+        ),
+        (
+            "Notification precision",
+            "alert_once",
+            "n/a",
+            _precision(alert_once),
+            precision["alert_once"]["denominator"] == 0,
+        ),
+        *(
+            (
+                "Notification precision",
+                strategy,
+                "100 %",
+                _precision(release[strategy]),
+                precision[strategy]["value"] == 1.0,
+            )
+            for strategy in ("full", "change_driven")
+        ),
+        (
+            "Records examined",
+            "alert_once",
+            "0",
+            _number(alert_once["records_examined"]),
+            alert_once["records_examined"] == 0,
+        ),
+        (
+            "Records examined",
+            "full",
+            "all",
+            f"{full['records_examined']:,} of {total:,}",
+            full["records_examined"] == total,
+        ),
+        (
+            "Records examined",
+            "change_driven",
+            "changed only",
+            f"{change['records_examined']:,} = records of the {changed['recorded']:,} changed stored keys",
+            change["records_examined"] == changed["carrier_records"] < full["records_examined"],
+        ),
+        (
+            "Time per release",
+            "change_driven",
+            "lower than full",
+            f"median {change['timing_ms']['median']:,.1f} ms vs {full['timing_ms']['median']:,.1f} ms",
+            change["timing_ms"]["median"] < full["timing_ms"]["median"],
+        ),
+        *(
+            ("Point-in-time correctness", strategy, "100 %", _ratio(point[strategy]), point[strategy]["value"] == 1.0)
+            for strategy in STRATEGIES
+        ),
     ]
-    met = sum(passed for _label, passed in checks)
-    lines = [f"Paper Table VI expectations met: **{met} of {len(checks)}**.", ""]
-    lines += [f"- {'met' if passed else 'NOT met'}: {label}" for label, passed in checks]
+    return [
+        {"metric": metric, "strategy": strategy, "expected": expected, "measured": measured, "met": met}
+        for metric, strategy, expected, measured, met in rows
+    ]
+
+
+def _expectations(expectations: Sequence[Mapping[str, Any]]) -> list[str]:
+    """The comparison of the measurements with paper Table VI as Markdown."""
+    met = sum(row["met"] for row in expectations)
+    lines = [f"Paper Table VI expectations met: **{met} of {len(expectations)}**.", ""]
+    lines += _table(
+        ["Metric", "Strategy", "Expected (paper)", "Measured", "Met"],
+        [
+            [
+                row["metric"],
+                STRATEGY_LABELS[row["strategy"]],
+                row["expected"],
+                row["measured"],
+                "yes" if row["met"] else "**no**",
+            ]
+            for row in expectations
+        ],
+    )
     return lines + [""]
 
 
@@ -766,7 +925,10 @@ def _real_pair_section(real: Mapping[str, Any], repeats: int) -> list[str]:
     lines += [
         f"{old['file']} ({old['records']:,} records) → {new['file']} ({new['records']:,} records); "
         f"natural changes per category: "
-        + ", ".join(f"{name.replace('_', ' ')} {value['carried'] + value['uncarried']:,}" for name, value in real["changes"]["categories"].items())
+        + ", ".join(
+            f"{name.replace('_', ' ')} {value['carried'] + value['uncarried']:,}"
+            for name, value in real["changes"]["categories"].items()
+        )
         + ".",
         "",
         *_cohort_section("Real-pair cohort", cohort),
@@ -810,10 +972,13 @@ def render_markdown(results: Mapping[str, Any]) -> str:
         "alert from that variant. Stale = current alerts not in the ground truth for K_new; affected = alerts the "
         "change made obsolete. Times are wall-clock milliseconds of the activation call (excluding the commit).",
         "",
-        *_expectations(scale, correctness),
+        *_expectations(synthetic["table_vi_expectations"]),
         "## Rule revision (D4 v1 → v2 adds ABCC8), scale cohort",
         "",
         *_rule_table(scale, repeats),
+        "",
+        "The rule revision follows the release, so its ground truth is K_new + rules v2; the alert-once baseline "
+        "still shows the stale alerts it kept from the release.",
         "",
         "## Per-category breakdown of the release (scale cohort)",
         "",
@@ -842,7 +1007,9 @@ def render_markdown(results: Mapping[str, Any]) -> str:
                 [
                     STRATEGY_LABELS[s],
                     ", ".join(f"{value:,.1f}" for value in scale["strategies"][s]["release"]["timing_ms"]["runs"]),
-                    ", ".join(f"{value:,.1f}" for value in scale["strategies"][s]["rule_revision"]["timing_ms"]["runs"]),
+                    ", ".join(
+                        f"{value:,.1f}" for value in scale["strategies"][s]["rule_revision"]["timing_ms"]["runs"]
+                    ),
                     _yes(scale["strategies"][s]["outcomes_identical_across_repeats"]),
                 ]
                 for s in STRATEGIES

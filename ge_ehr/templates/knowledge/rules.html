@@ -1,0 +1,95 @@
+{#- Decision rules: the current version of every rule with its criteria, findings and version history. -#}
+{% extends "base.html" %}
+{% import "_macros.html" as ui %}
+{% import "knowledge/_kb_macros.html" as kb with context %}
+{% block title %}Decision rules{% endblock %}
+{% block content %}
+{% call ui.page_header("Decision rules",
+    "Medication-aware rules (paper Table III). Every version is kept and every alert records the rule version that produced it.",
+    icon="journal-medical") %}
+  {% if is_admin %}
+  <a class="btn btn-primary" href="{{ url_for('knowledge.import_rules') }}"><i class="bi bi-journal-plus" aria-hidden="true"></i> Import rule set</a>
+  {% endif %}
+{% endcall %}
+
+{% if cards %}
+{% set labels = cards|map(attribute="current.version.rule_set_label")|reject("none")|unique|list %}
+<div class="rules-summary">
+  <div class="rules-summary-item"><span class="rules-summary-value">{{ cards|length }}</span><span class="rules-summary-label">current rules</span></div>
+  <div class="rules-summary-item"><span class="rules-summary-label">Rule set</span><span class="fw-semibold">{{ labels|join(", ") if labels else "—" }}</span></div>
+  <div class="rules-summary-item"><span class="rules-summary-label">Versions</span>
+    <span class="version-chip-row">{% for card in cards %}<span class="version-chip">{{ card.current.version.label }}</span>{% endfor %}</span></div>
+</div>
+{{ ui.advisory_disclaimer("Rules are simplified summaries of published guidance and must be reviewed by diabetes specialists before any clinical use.") }}
+
+<div class="rule-grid">
+  {% for card in cards %}
+  {% set current = card.current %}
+  {% set version = current.version %}
+  <article class="card rule-card rule-card-{{ version.severity }}" id="rule-{{ card.rule.code }}" aria-labelledby="rule-{{ card.rule.code }}-title">
+    <div class="rule-card-header">
+      <span class="rule-code" aria-hidden="true">{{ card.rule.code }}</span>
+      <div class="rule-heading">
+        <h2 class="rule-title" id="rule-{{ card.rule.code }}-title"><span class="visually-hidden">{{ card.rule.code }}: </span>{{ version.title }}</h2>
+        <div class="rule-meta"><span class="badge badge-version">v{{ version.version }}</span><span>{{ version.kind|humanize }}</span>{% if version.rule_set_label %}<span>{{ version.rule_set_label }}</span>{% endif %}</div>
+      </div>
+      <div class="rule-severity">{{ ui.severity_badge(version.severity) }}</div>
+    </div>
+    <div class="card-body">
+      <dl class="rule-criteria">
+        <dt><i class="bi bi-diagram-3" aria-hidden="true"></i>Genetic</dt>
+        <dd>
+          <span class="gene-chip-row">{% for gene in C.GENES if gene in current.spec.genes %}<span class="gene-chip">{{ gene }}</span>{% endfor %}</span>
+          <span class="class-row">{% for cls in C.CLASSES if cls in current.spec.classes %}{{ ui.class_badge(cls) }}{% endfor %}</span>
+          {% if current.spec.mechanism %}<span class="mechanism-chip"><i class="bi bi-lightning-charge" aria-hidden="true"></i>{{ current.spec.mechanism|mechanism_label }}</span>{% endif %}
+        </dd>
+        <dt><i class="bi bi-capsule" aria-hidden="true"></i>Clinical</dt>
+        <dd>{{ current.clinical }}</dd>
+      </dl>
+      <div class="rule-recommendation">
+        <div class="rule-recommendation-label">Recommendation</div>
+        <p>{{ version.recommendation }}</p>
+      </div>
+      <p class="rule-source"><i class="bi bi-book" aria-hidden="true"></i><span><span class="visually-hidden">Source: </span>{{ version.source or "No source given" }}</span></p>
+      {% if version.change_note %}<p class="rule-note"><i class="bi bi-pencil" aria-hidden="true"></i><span>{{ version.change_note }}</span></p>{% endif %}
+    </div>
+    <div class="rule-card-footer">
+      <div class="rule-findings">
+        {% if card.current_alerts %}<a href="{{ url_for('alerts.inbox', rule=card.rule.code) }}"><i class="bi bi-bell-fill" aria-hidden="true"></i>{{ card.current_alerts|number }} current {{ "alert" if card.current_alerts == 1 else "alerts" }}</a>
+        {% else %}<span class="text-body-secondary"><i class="bi bi-bell" aria-hidden="true"></i>No current alert</span>{% endif %}
+        {% if card.current_notes %}<span class="text-body-secondary">· {{ card.current_notes|number }} {{ "note" if card.current_notes == 1 else "notes" }}</span>{% endif %}
+      </div>
+      <details class="version-history">
+        <summary>Version history ({{ card.history|length }})</summary>
+        <div class="table-responsive">
+          <table class="table table-app table-sm align-middle mb-0">
+            <thead><tr><th scope="col">Version</th><th scope="col">Criterion</th><th scope="col" class="d-none d-sm-table-cell">Change note</th><th scope="col" class="d-none d-md-table-cell">Imported</th></tr></thead>
+            <tbody>
+              {% for item in card.history %}
+              <tr>
+                <td class="text-nowrap"><span class="badge badge-version">v{{ item.version.version }}</span>{% if item.version.is_current %} <span class="badge badge-current">Current</span>{% endif %}</td>
+                <td><div>{{ item.genetic }}</div><div class="small text-body-secondary">{{ item.clinical }} · {{ item.version.severity|severity_label }}</div></td>
+                <td class="d-none d-sm-table-cell small">{{ item.version.change_note or "—" }}</td>
+                <td class="d-none d-md-table-cell small text-nowrap">{{ item.version.created_at|date }}<div class="text-body-secondary">{{ item.version.imported_by.full_name if item.version.imported_by else "System" }}</div></td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </details>
+    </div>
+  </article>
+  {% endfor %}
+</div>
+{% else %}
+<div class="card"><div class="card-body">
+  {% if is_admin %}
+  {% call ui.empty_state("journal-medical", "No rules loaded", "Import a rule-set JSON such as data/rules/ruleset_v1.json. On a fresh installation, “flask rules bootstrap” loads the initial rules.") %}
+    <a class="btn btn-primary" href="{{ url_for('knowledge.import_rules') }}"><i class="bi bi-journal-plus" aria-hidden="true"></i> Import rule set</a>
+  {% endcall %}
+  {% else %}
+  {{ ui.empty_state("journal-medical", "No rules loaded", "An administrator loads the decision-support rules. Until then no alert or note is raised.") }}
+  {% endif %}
+</div></div>
+{% endif %}
+{% endblock %}

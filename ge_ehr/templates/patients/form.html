@@ -1,0 +1,71 @@
+{#- New patient (patient is None) or edit patient: demographics and diabetes diagnosis. -#}
+{% extends "base.html" %}
+{% import "_macros.html" as ui %}
+{% import "patients/_patient_macros.html" as pm %}
+{% set editing = patient is not none %}
+{% block title %}{{ "Edit " ~ patient.display_name if editing else "New patient" }}{% endblock %}
+{% block content %}
+{% if editing %}
+{{ pm.breadcrumb([("Patients", url_for("patients.list_patients")),
+                  (patient.display_name, url_for("patients.view_patient", patient_id=patient.id)),
+                  ("Edit", none)]) }}
+{{ ui.page_header("Edit patient", patient.display_name ~ " · " ~ patient.mrn ~ ". Changing the diagnosis re-evaluates decision support for this patient.", icon="pencil-square") }}
+{% else %}
+{{ pm.breadcrumb([("Patients", url_for("patients.list_patients")), ("New patient", none)]) }}
+{{ ui.page_header("New patient", "Record demographics and the diabetes diagnosis. Genomic data is added afterwards by uploading a VCF.", icon="person-plus") }}
+{% endif %}
+
+<div class="row g-4">
+  <div class="col-lg-8">
+    <form class="card" method="post" novalidate aria-label="{{ 'Edit patient' if editing else 'New patient' }}">
+      <div class="card-body">
+        {{ form.hidden_tag() }}
+        {{ ui.render_form_errors(form) }}
+        <fieldset class="form-section">
+          <legend class="form-section-title"><i class="bi bi-person-vcard" aria-hidden="true"></i> Demographics</legend>
+          <div class="row g-3">
+            <div class="col-md-6">{{ ui.render_field(form.mrn, wrapper_class="", class_="font-monospace") }}</div>
+            <div class="col-md-6">{{ ui.render_field(form.external_id, wrapper_class="", class_="font-monospace") }}</div>
+            <div class="col-md-6">{{ ui.render_field(form.given_name, wrapper_class="") }}</div>
+            <div class="col-md-6">{{ ui.render_field(form.family_name, wrapper_class="") }}</div>
+            <div class="col-sm-6 col-md-4">{{ ui.render_field(form.sex, wrapper_class="") }}</div>
+            <div class="col-sm-6 col-md-4">{{ ui.render_field(form.birth_date, wrapper_class="", max=today) }}</div>
+            <div class="col-md-4">{{ ui.render_field(form.family_id, wrapper_class="", class_="font-monospace") }}</div>
+            <div class="col-12">{{ ui.render_field(form.notes, wrapper_class="") }}</div>
+          </div>
+        </fieldset>
+        <hr class="form-divider">
+        <fieldset class="form-section">
+          <legend class="form-section-title"><i class="bi bi-clipboard2-pulse" aria-hidden="true"></i> Diabetes diagnosis</legend>
+          <div class="row g-3">
+            <div class="col-md-4">{{ ui.render_field(form.diabetes_type, wrapper_class="") }}</div>
+            <div class="col-md-4">{{ ui.render_field(form.age_at_diagnosis_months, wrapper_class="", min=0, inputmode="numeric") }}</div>
+            <div class="col-md-4">{{ ui.render_field(form.diagnosed_on, wrapper_class="", max=today) }}</div>
+          </div>
+        </fieldset>
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary"><i class="bi bi-check2" aria-hidden="true"></i> {{ "Save changes" if editing else "Create patient" }}</button>
+          <a class="btn btn-outline-secondary" href="{{ url_for('patients.view_patient', patient_id=patient.id) if editing else url_for('patients.list_patients') }}">Cancel</a>
+        </div>
+      </div>
+    </form>
+  </div>
+  <div class="col-lg-4">
+    <aside class="card side-help" aria-labelledby="form-help-title">
+      <div class="card-body">
+        <h2 class="side-help-title" id="form-help-title"><i class="bi bi-lightbulb" aria-hidden="true"></i> Good to know</h2>
+        <ul class="side-help-list">
+          <li><strong>Synthetic data only.</strong> This research prototype must never hold real patient information.</li>
+          <li><strong>Age at diagnosis</strong> is recorded in months. Rule D4 (KCNJ11/ABCC8 neonatal diabetes) applies only when diabetes was diagnosed before 12 months of age.</li>
+          <li><strong>Family ID</strong> links relatives who share a variant, so each carrier can be offered cascade testing.</li>
+          {% if editing %}
+          <li><strong>Diagnosis changes</strong> re-run the decision rules for this patient; alerts that no longer apply are superseded, never deleted.</li>
+          {% else %}
+          <li><strong>Next step:</strong> after saving, upload the patient's VCF to classify panel variants and run decision support.</li>
+          {% endif %}
+        </ul>
+      </div>
+    </aside>
+  </div>
+</div>
+{% endblock %}

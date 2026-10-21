@@ -1,0 +1,81 @@
+{#- Import a ClinVar(-format) VCF as a new knowledge-base release (admin). -#}
+{% extends "base.html" %}
+{% import "_macros.html" as ui %}
+{% import "knowledge/_kb_macros.html" as kb with context %}
+{% block title %}Import release{% endblock %}
+{% block content %}
+<nav aria-label="Breadcrumb"><ol class="breadcrumb kb-breadcrumb">
+  <li class="breadcrumb-item"><a href="{{ url_for('knowledge.releases') }}">Releases</a></li>
+  <li class="breadcrumb-item active" aria-current="page">Import</li>
+</ol></nav>
+{{ ui.page_header("Import a knowledge-base release",
+    "Upload a ClinVar GRCh38 VCF. It is stored as a new release; activating it re-evaluates the patients whose stored variants changed class.",
+    icon="upload") }}
+
+<div class="row g-4">
+  <div class="col-lg-7">
+    <form class="card" method="post" action="{{ url_for('knowledge.import_release') }}" enctype="multipart/form-data" novalidate>
+      <div class="card-header"><span><i class="bi bi-file-earmark-arrow-up" aria-hidden="true"></i> Release file</span></div>
+      <div class="card-body">
+        {{ form.csrf_token }}
+        {{ ui.render_form_errors(form) }}
+        {% if duplicate %}
+        <div class="alert alert-warning" role="alert">
+          <i class="bi bi-files" aria-hidden="true"></i>
+          <div class="alert-body">This exact file is already stored as
+            <a class="alert-link" href="{{ url_for('knowledge.view_release', release_id=duplicate.id) }}">{{ duplicate.label }}</a>{% if duplicate.is_current %} (the current release){% endif %}.
+            {% if not duplicate.is_current %}Open it to compare or activate it instead of importing it again.{% endif %}</div>
+        </div>
+        {% endif %}
+        {{ ui.render_field(form.vcf_file, **{"data-max-bytes": config.MAX_CONTENT_LENGTH}) }}
+        <div class="row g-3">
+          <div class="col-sm-7">{{ ui.render_field(form.label, wrapper_class="") }}</div>
+          <div class="col-sm-5">{{ ui.render_field(form.release_date, wrapper_class="") }}</div>
+        </div>
+        <hr class="form-divider">
+        {{ ui.render_field(form.expert_panel_csv) }}
+        {{ ui.render_field(form.notes) }}
+        <hr class="form-divider">
+        <fieldset class="activation-fieldset">
+          <legend class="form-label">Activation</legend>
+          {{ ui.render_field(form.activate) }}
+          {{ ui.render_field(form.strategy, help="Used when the release is activated now. " ~ form.strategy.description, wrapper_class="mb-0") }}
+        </fieldset>
+      </div>
+      <div class="card-footer form-footer">
+        {{ form.submit(class_="btn btn-primary") }}
+        <a class="btn btn-outline-secondary" href="{{ url_for('knowledge.releases') }}">Cancel</a>
+      </div>
+    </form>
+  </div>
+
+  <div class="col-lg-5">
+    <section class="card" aria-labelledby="what-happens-title">
+      <div class="card-header"><h2 class="card-heading" id="what-happens-title"><i class="bi bi-diagram-3" aria-hidden="true"></i> What happens</h2></div>
+      <div class="card-body">
+        <div class="current-strip">
+          <div class="small text-body-secondary">Current release</div>
+          {% if current %}
+          <div class="fw-semibold">{{ kb.release_link(current) }}</div>
+          <div class="small text-body-secondary">{{ current.record_count|number }} records · activated {{ current.activated_at|dt }}</div>
+          {% else %}
+          <div class="fw-semibold">None — the first activation classifies every stored variant for the first time.</div>
+          {% endif %}
+        </div>
+        <ol class="step-list">
+          <li><strong>Validate.</strong> The file must be a GRCh38 ClinVar-format VCF; GRCh37 files are refused, and the same file (by SHA-256) can be imported only once.</li>
+          <li><strong>Store.</strong> Records in GCK, HNF1A, HNF4A, HNF1B, KCNJ11, ABCC8 and INS become a new, inactive release. Files marked <code>##ge_ehr_synthetic=true</code> are flagged as synthetic.</li>
+          <li><strong>Activate</strong> (now, or later from the release page). Only the {{ stored_keys|number }} stored patient variant {{ "key is" if stored_keys == 1 else "keys are" }} compared with the current release; the carriers of each changed key are re-evaluated:
+            <ul class="category-list">
+              <li>{{ kb.category_badge("upgrade") }} new alerts, flagged <em>Reclassified</em>, high priority, clinicians notified</li>
+              <li>{{ kb.category_badge("downgrade") }} alerts superseded and a review notice raised — therapy is never reversed automatically</li>
+              <li>{{ kb.category_badge("within_actionable") }} {{ kb.category_badge("within_non_actionable") }} provenance updated, no notification</li>
+            </ul>
+          </li>
+          <li><strong>Log.</strong> Every activation is recorded as a re-evaluation run with its counters, so the state before and after stays reproducible.</li>
+        </ol>
+      </div>
+    </section>
+  </div>
+</div>
+{% endblock %}

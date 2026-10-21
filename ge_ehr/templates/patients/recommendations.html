@@ -1,0 +1,236 @@
+{#- Recommendations of one patient (clinical roles only): current alerts by severity, notes,
+    review notices, history and provenance; ``?at=`` shows the state at a past moment (§7.5). -#}
+{% extends "base.html" %}
+{% import "_macros.html" as ui %}
+{% import "patients/_patient_macros.html" as pm %}
+{% block title %}Recommendations · {{ patient.display_name }}{% endblock %}
+
+{% macro finding_card(finding, live) -%}
+{%- set alert = finding.alert -%}
+<article class="finding-card finding-{{ alert.kind }} finding-sev-{{ alert.severity or 'note' }}" aria-labelledby="finding-{{ alert.id }}-title">
+  <div class="finding-head">
+    <div class="finding-heading">
+      {%- if alert.kind == "alert" %}{{ ui.severity_badge(alert.severity) }}{% else %}{{ ui.kind_badge("note") }}{% endif %}
+      <span class="rule-chip" title="Rule {{ finding.rule_label }}">{{ finding.rule_label }}</span>
+      <h3 class="finding-title" id="finding-{{ alert.id }}-title">{{ alert.title }}</h3>
+    </div>
+    {{ pm.finding_badges(alert, status=finding.status) }}
+  </div>
+  <p class="finding-message">{{ alert.message }}</p>
+  {%- if alert.kind == "alert" %}
+  <p class="advisory-tag"><i class="bi bi-info-circle" aria-hidden="true"></i>{{ C.ADVISORY_DISCLAIMER }}</p>
+  {%- endif %}
+  <dl class="finding-meta">
+    <div><dt>Variant</dt><dd><span class="gene-symbol">{{ alert.variant_key.gene or "—" }}</span> <code class="variant-key">{{ alert.variant_key.label }}</code></dd></div>
+    <div><dt>Classification</dt><dd>{{ ui.class_badge(finding.classification) }} {{ finding.classification|class_label }}</dd></div>
+    <div><dt>Release</dt><dd>{{ finding.release.label if finding.release else "No release" }}</dd></div>
+    <div><dt>Raised</dt><dd>{{ alert.created_at|dt }} · {{ alert.trigger|trigger_label }}</dd></div>
+    <div class="finding-meta-wide"><dt>Source</dt><dd>{{ alert.source or "—" }}</dd></div>
+  </dl>
+  {%- if finding.status == "reviewed" and alert.reviewed_at %}
+  <div class="finding-review">
+    <i class="bi bi-check2-circle" aria-hidden="true"></i>
+    <div>Reviewed by <strong>{{ alert.reviewed_by.full_name if alert.reviewed_by else "an unknown user" }}</strong> on {{ alert.reviewed_at|dt }}
+      {%- if alert.review_comment %}<blockquote class="notice-comment">{{ alert.review_comment }}</blockquote>{% endif %}</div>
+  </div>
+  {%- endif %}
+  <div class="finding-foot">
+    <details class="finding-provenance">
+      <summary>Provenance · {{ finding.events|length }} event{{ "" if finding.events|length == 1 else "s" }}</summary>
+      {{ pm.provenance_timeline(finding.events, compact=true) }}
+    </details>
+    <div class="finding-actions">
+      <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('alerts.view_alert', alert_id=alert.id, next=return_url) }}">Details</a>
+      {%- if live and alert.status == "active" %}
+      {{ ui.confirm_button(url_for('alerts.review_alert', alert_id=alert.id), "Mark reviewed",
+                           "Mark " ~ finding.rule_label ~ " (" ~ alert.title ~ ") as reviewed? It stays current; open Details to add a comment.",
+                           variant="outline-primary", icon="check2", confirm_label="Mark reviewed", title="Review " ~ alert.kind,
+                           hidden={"next": return_url}) }}
+      {%- endif %}
+    </div>
+  </div>
+</article>
+{%- endmacro %}
+
+{% block content %}
+{% set live = view.at is none %}
+{{ pm.breadcrumb([("Patients", url_for("patients.list_patients")),
+                  (patient.display_name, url_for("patients.view_patient", patient_id=patient.id)),
+                  ("Recommendations", none)]) }}
+{% call ui.page_header("Recommendations", patient.display_name ~ " · " ~ patient.mrn ~ " · Diabetes type: " ~ (patient.diagnosis.diabetes_type if patient.diagnosis else "unknown")|diabetes_type_label, icon="clipboard2-check") %}
+  <a class="btn btn-outline-secondary" href="{{ url_for('patients.view_patient', patient_id=patient.id) }}"><i class="bi bi-person" aria-hidden="true"></i> Patient record</a>
+  <a class="btn btn-outline-secondary" href="{{ url_for('api.patient_fhir', patient_id=patient.id, download=1) }}" download><i class="bi bi-filetype-json" aria-hidden="true"></i> Export FHIR</a>
+{% endcall %}
+
+{# ------------------------------------------------------- point in time #}
+<form class="card filter-bar pit-form" method="get" action="{{ url_for('patients.recommendations', patient_id=patient.id) }}" novalidate aria-label="View recommendations at a point in time">
+  <div class="card-body">
+    <div class="pit-row">
+      <div class="pit-field">
+        <label class="form-label" for="pit-at">View as of (UTC)</label>
+        <input class="form-control{% if at_error %} is-invalid{% endif %}" type="datetime-local" id="pit-at" name="at"
+               value="{{ view.at_value }}" step="{{ view.at_step }}"
+               aria-describedby="pit-at-help{% if at_error %} pit-at-error{% endif %}"{% if at_error %} aria-invalid="true"{% endif %}>
+        {% if at_error %}<div class="invalid-feedback" id="pit-at-error">{{ at_error }}</div>{% endif %}
+        <div class="form-text" id="pit-at-help">See exactly what the system recommended at that moment, and on what evidence.</div>
+      </div>
+      <div class="pit-actions">
+        <button type="submit" class="btn btn-primary"><i class="bi bi-clock-history" aria-hidden="true"></i> View</button>
+        {% if not live or at_error %}<a class="btn btn-outline-secondary" href="{{ url_for('patients.recommendations', patient_id=patient.id) }}">Current state</a>{% endif %}
+      </div>
+    </div>
+    {% if view.change_points %}
+    <div class="pit-points">
+      <span class="pit-points-label" id="pit-points-label">Changes:</span>
+      <ul class="pit-point-list" aria-labelledby="pit-points-label">
+        {% for point in view.change_points %}
+        {% set selected = not live and point.value == view.at_value %}
+        <li><a class="pit-point{% if selected %} is-selected{% endif %}" href="{{ url_for('patients.recommendations', patient_id=patient.id, at=point.value) }}"{% if selected %} aria-current="true"{% endif %}>
+          <span class="pit-point-time">{{ point.display }}</span>
+          <span class="pit-point-label">{{ point.label }}</span>
+          <span class="pit-point-delta">{% if point.created %}<span class="delta-plus" title="{{ point.created }} created">+{{ point.created }}</span>{% endif %}{% if point.superseded %}<span class="delta-minus" title="{{ point.superseded }} superseded">−{{ point.superseded }}</span>{% endif %}</span>
+        </a></li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+  </div>
+</form>
+
+{% if not live %}
+<div class="pit-banner" role="status">
+  <i class="bi bi-clock-history" aria-hidden="true"></i>
+  <div>
+    <strong>Viewing the state as of {{ view.at_display }}.</strong>
+    Each finding shows the release, rule version and classification it rested on at that moment. Review notices and history are shown for the current state only.
+  </div>
+  <a class="btn btn-sm btn-light" href="{{ url_for('patients.recommendations', patient_id=patient.id) }}">Back to current state</a>
+</div>
+{% endif %}
+
+{{ ui.advisory_disclaimer("Each recommendation names its rule version, evidence source and the knowledge-base release behind the classification.") }}
+
+{# ------------------------------------------------------- review notices #}
+{% if live and view.open_notices %}
+<section class="block-gap" id="review-notices" aria-labelledby="notices-title">
+  <h2 class="rec-group-title rec-group-title-notice" id="notices-title"><i class="bi bi-clipboard2-pulse" aria-hidden="true"></i> Open review notices <span class="count-badge">{{ view.open_notices|length }}</span></h2>
+  <p class="rec-group-help">A variant was reclassified out of the actionable band and the alerts below were superseded. GE-EHR never reverses therapy automatically — review any treatment change made on the basis of these alerts.</p>
+  <div class="notice-stack">
+    {% for notice in view.open_notices %}
+    {% set form = notice_forms.get(notice.id) %}{% set show_patient = false %}
+    {% include "alerts/_notice_card.html" %}
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
+{# ------------------------------------------------------- current alerts #}
+<section class="block-gap" id="current-alerts" aria-labelledby="alerts-title">
+  <div class="rec-group-header">
+    <h2 class="rec-group-title" id="alerts-title"><i class="bi bi-bell" aria-hidden="true"></i> {{ "Current alerts" if live else "Alerts at that time" }} <span class="count-badge">{{ view.alert_count }}</span></h2>
+    {% if view.counts %}{{ pm.severity_counts(view.counts) }}{% endif %}
+  </div>
+  {% for severity, findings in view.groups %}
+  <div class="severity-group severity-group-{{ severity }}">
+    <h3 class="severity-group-title severity-group-title-{{ severity }}">{{ severity|severity_label }} severity <span class="count-badge">{{ findings|length }}</span></h3>
+    <div class="finding-stack">
+      {% for finding in findings %}{{ finding_card(finding, live) }}{% endfor %}
+    </div>
+  </div>
+  {% else %}
+  <div class="card">
+    <div class="card-body">
+      {% if live %}
+      {{ ui.empty_state("check2-circle", "No current alerts",
+                        "No decision rule fires for this patient's variants and therapy under the current release and rules." if patient.variants else "Upload a VCF to classify the patient's panel variants and run decision support.") }}
+      {% else %}
+      {{ ui.empty_state("clock-history", "No alerts at that time", "No alert was current for this patient at " ~ view.at_display ~ ".") }}
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</section>
+
+{# ------------------------------------------------------ information notes #}
+{% if view.notes %}
+<section class="block-gap" id="notes" aria-labelledby="notes-title">
+  <h2 class="rec-group-title" id="notes-title"><i class="bi bi-journal-text" aria-hidden="true"></i> Information notes <span class="count-badge">{{ view.notes|length }}</span></h2>
+  <p class="rec-group-help">The genetic criterion of a rule is met but its clinical condition is not, so no alert was raised. Notes explain why.</p>
+  <div class="finding-stack">
+    {% for finding in view.notes %}{{ finding_card(finding, live) }}{% endfor %}
+  </div>
+</section>
+{% endif %}
+
+{% if live %}
+{# --------------------------------------------------------------- history #}
+<section class="card card-table block-gap" id="history" aria-labelledby="history-title">
+  <div class="card-header">
+    <div>
+      <h2 class="card-title-text" id="history-title"><i class="bi bi-clock-history" aria-hidden="true"></i> History</h2>
+      <p class="card-subtitle-text">Superseded alerts and notes are kept with the reason and the run that superseded them.</p>
+    </div>
+    <span class="count-badge">{{ view.history|length }}</span>
+  </div>
+  {% if view.history %}
+  <div class="table-responsive">
+    <table class="table table-app align-middle history-table">
+      <thead>
+        <tr>
+          <th scope="col">Finding</th>
+          <th scope="col" class="d-none d-md-table-cell">Variant</th>
+          <th scope="col" class="d-none d-lg-table-cell">Raised</th>
+          <th scope="col">Superseded</th>
+          <th scope="col" class="d-none d-sm-table-cell">Run</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for alert in view.history %}
+        <tr>
+          <td>
+            <div class="history-finding">
+              {%- if alert.kind == "alert" %}{{ ui.severity_badge(alert.severity) }}{% else %}{{ ui.kind_badge("note") }}{% endif %}
+              <a class="rule-chip" href="{{ url_for('alerts.view_alert', alert_id=alert.id, next=return_url) }}">{{ alert.confirmed_rule_version.label }}</a>
+              <span>{{ alert.title }}</span>
+            </div>
+            <div class="small text-body-secondary d-md-none"><span class="gene-symbol">{{ alert.variant_key.gene }}</span> · {{ alert.variant_key.label }} · was {{ alert.classification }}</div>
+          </td>
+          <td class="d-none d-md-table-cell">
+            <span class="gene-symbol">{{ alert.variant_key.gene or "—" }}</span> <code class="variant-key">{{ alert.variant_key.label }}</code>
+            <div class="small text-body-secondary">Raised as {{ ui.class_badge(alert.classification) }}{% if alert.created_release %} under {{ alert.created_release.label }}{% endif %}</div>
+          </td>
+          <td class="d-none d-lg-table-cell text-nowrap">{{ alert.created_at|dt }}<div class="small text-body-secondary">{{ alert.trigger|trigger_label }}</div></td>
+          <td>
+            <div class="text-nowrap">{{ alert.superseded_at|dt }}</div>
+            <span class="reason-tag reason-{{ alert.superseded_reason or 'unknown' }}">{{ alert.superseded_reason|superseded_reason_label }}</span>
+            {%- if alert.review_notice %}<a class="history-notice-link" href="#{{ 'review-notices' if alert.review_notice.status == 'open' else 'review-notices-all' }}"><i class="bi bi-clipboard2-pulse" aria-hidden="true"></i>Review notice ({{ alert.review_notice.status }})</a>{% endif %}
+          </td>
+          <td class="d-none d-sm-table-cell text-nowrap">
+            {%- if alert.superseded_run_id %}<a href="{{ url_for('knowledge.view_run', run_id=alert.superseded_run_id) }}">Run #{{ alert.superseded_run_id }}</a>
+            {%- else %}<span class="text-body-secondary">—</span>{% endif -%}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="card-body"><p class="muted-empty"><i class="bi bi-clock" aria-hidden="true"></i> Nothing has been superseded for this patient yet.</p></div>
+  {% endif %}
+</section>
+
+{% if view.acknowledged_notices %}
+<section class="block-gap" id="review-notices-all" aria-labelledby="acked-title">
+  <details class="acked-notices">
+    <summary><h2 class="rec-group-title d-inline-flex" id="acked-title"><i class="bi bi-check2-square" aria-hidden="true"></i> Acknowledged review notices <span class="count-badge">{{ view.acknowledged_notices|length }}</span></h2></summary>
+    <div class="notice-stack">
+      {% for notice in view.acknowledged_notices %}
+      {% set form = none %}{% set show_patient = false %}
+      {% include "alerts/_notice_card.html" %}
+      {% endfor %}
+    </div>
+  </details>
+</section>
+{% endif %}
+{% endif %}
+{% endblock %}

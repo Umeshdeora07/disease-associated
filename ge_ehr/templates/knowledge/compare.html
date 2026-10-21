@@ -1,0 +1,183 @@
+{#- Compare two releases: changes among stored patient variant keys (all keys with all=1). -#}
+{% extends "base.html" %}
+{% import "_macros.html" as ui %}
+{% import "knowledge/_kb_macros.html" as kb with context %}
+{% block title %}Compare releases{% endblock %}
+{% block content %}
+<nav aria-label="Breadcrumb"><ol class="breadcrumb kb-breadcrumb">
+  <li class="breadcrumb-item"><a href="{{ url_for('knowledge.releases') }}">Releases</a></li>
+  <li class="breadcrumb-item active" aria-current="page">Compare</li>
+</ol></nav>
+{{ ui.page_header("Compare releases",
+    "Which variant classifications differ between two releases, how each change is categorised and how many patients carry it.",
+    icon="arrow-left-right") }}
+
+{% if releases|length < 2 %}
+<div class="card"><div class="card-body">
+  {% call ui.empty_state("layers", "At least two releases are needed", "Import another ClinVar release to compare it with the current one.") %}
+    {% if is_admin %}<a class="btn btn-primary" href="{{ url_for('knowledge.import_release') }}"><i class="bi bi-upload" aria-hidden="true"></i> Import release</a>{% endif %}
+    <a class="btn btn-outline-secondary" href="{{ url_for('knowledge.releases') }}">All releases</a>
+  {% endcall %}
+</div></div>
+{% else %}
+<form class="card filter-bar" method="get" action="{{ url_for('knowledge.compare_releases') }}" aria-label="Choose the releases to compare">
+  <div class="card-body">
+    <div class="row g-2 align-items-end">
+      <div class="col-12 col-md-4">
+        <label class="form-label" for="compare-old">From (older)</label>
+        <select class="form-select" id="compare-old" name="old">
+          {% for release in releases %}<option value="{{ release.id }}"{% if old and release.id == old.id %} selected{% endif %}>{{ release.label }}{% if release.is_current %} — current{% endif %}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="col-12 col-md-4">
+        <label class="form-label" for="compare-new">To (newer)</label>
+        <select class="form-select" id="compare-new" name="new">
+          {% for release in releases %}<option value="{{ release.id }}"{% if new and release.id == new.id %} selected{% endif %}>{{ release.label }}{% if release.is_current %} — current{% endif %}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="col-12 col-md-4 col-lg-2">
+        <div class="form-check filter-check-kb">
+          <input class="form-check-input" type="checkbox" id="compare-all" name="all" value="1"{% if all_keys %} checked{% endif %} aria-describedby="compare-all-help">
+          <label class="form-check-label" for="compare-all">All keys</label>
+        </div>
+        <div class="visually-hidden" id="compare-all-help">Include variants no patient carries.</div>
+      </div>
+      <div class="col-12 col-lg-2 d-flex gap-2 justify-content-lg-end">
+        <button type="submit" class="btn btn-primary"><i class="bi bi-arrow-left-right" aria-hidden="true"></i> Compare</button>
+        {% if old and new and old.id != new.id %}<a class="btn btn-outline-secondary" href="{{ url_for('knowledge.compare_releases', old=new.id, new=old.id, all=1 if all_keys else none) }}" title="Swap the two releases"><i class="bi bi-arrow-down-up" aria-hidden="true"></i><span class="visually-hidden">Swap</span></a>{% endif %}
+      </div>
+    </div>
+    <p class="form-text mb-0 mt-2">By default only the variant keys stored for some patient are compared — exactly what an activation examines. Tick “All keys” to include variants no patient carries.</p>
+  </div>
+</form>
+
+{% if error %}
+<div class="alert alert-danger" role="alert"><i class="bi bi-x-octagon-fill" aria-hidden="true"></i><div class="alert-body">{{ error }}</div></div>
+{% endif %}
+
+{% if comparison %}
+{% set c = comparison %}
+{% set link_args = {"old": c.old.id, "new": c.new.id, "all": 1 if c.all_keys else none} %}
+<div class="compare-summary">
+  <div class="compare-pair">
+    <span class="fw-semibold">{{ kb.release_link(c.old) }}</span>
+    <i class="bi bi-arrow-right" aria-hidden="true"></i><span class="visually-hidden">to</span>
+    <span class="fw-semibold">{{ kb.release_link(c.new) }}</span>
+  </div>
+  <div class="compare-totals">
+    <strong>{{ c.total|number }}</strong> changed {{ "key" if c.total == 1 else "keys" }}
+    {% if c.all_keys %}across both releases{% else %}among {{ c.stored_keys|number }} stored patient variant {{ "key" if c.stored_keys == 1 else "keys" }}{% endif %}
+    · <strong>{{ c.carriers_affected|number }}</strong> {{ "patient carries" if c.carriers_affected == 1 else "patients carry" }} a changed variant
+  </div>
+</div>
+
+{% if c.activation_preview %}
+<div class="kb-note kb-note-action" role="note">
+  <i class="bi bi-lightning-charge" aria-hidden="true"></i>
+  <span>{{ c.old.label }} is the current release, so this is {% if c.all_keys %}a superset of {% endif %}what activating <strong>{{ c.new.label }}</strong> would apply.</span>
+  {% if is_admin %}<a class="btn btn-sm btn-primary ms-auto" href="{{ url_for('knowledge.view_release', release_id=c.new.id, _anchor='activate') }}">Activate {{ c.new.label }}…</a>{% endif %}
+</div>
+{% endif %}
+
+<div class="row g-3 mb-4" role="list" aria-label="Changes by category">
+  {% for summary in c.categories %}
+  <div class="col-6 col-lg-3" role="listitem">
+    <a class="category-card category-card-{{ summary.category|replace('_', '-') }}{% if c.category == summary.category %} is-selected{% endif %}"
+       href="{{ url_for('knowledge.compare_releases', category=none if c.category == summary.category else summary.category, **link_args) }}"
+       {% if c.category == summary.category %}aria-current="true"{% endif %}>
+      <span class="category-card-head">{{ kb.category_badge(summary.category) }}</span>
+      <span class="category-card-value">{{ summary.changes|number }}</span>
+      <span class="category-card-hint">{{ summary.carriers|number }} {{ "carrier" if summary.carriers == 1 else "carriers" }}</span>
+    </a>
+  </div>
+  {% endfor %}
+</div>
+
+<div class="row g-4">
+  <div class="col-xl-8">
+    <section class="card card-table" aria-labelledby="changes-title">
+      <div class="card-header">
+        <h2 class="card-heading" id="changes-title"><i class="bi bi-list-ul" aria-hidden="true"></i>
+          {% if c.category %}{{ c.category|category_label }}{% else %}All changes{% endif %}</h2>
+        {% if c.category %}<a class="small" href="{{ url_for('knowledge.compare_releases', **link_args) }}">Show all categories</a>{% endif %}
+      </div>
+      <div class="table-responsive">
+        <table class="table table-app align-middle change-table">
+          <thead><tr><th scope="col">Variant</th><th scope="col">Change</th><th scope="col" class="d-none d-md-table-cell">Category</th><th scope="col" class="text-end">Carriers</th></tr></thead>
+          <tbody>
+            {% for row in rows %}
+            <tr>
+              <td>
+                <div>{{ ui.gene(row.change.gene) }} {{ ui.variant_key(row.variant_key.label) }}</div>
+                {% if row.known and row.known.condition %}<div class="small text-body-secondary condition-text">{{ row.known.condition }}</div>{% endif %}
+                {% if not row.known %}<div class="small text-body-secondary">Not listed in {{ c.new.label }}</div>{% endif %}
+              </td>
+              <td>
+                {{ kb.class_change(row.change.old_class, row.change.new_class) }}
+                {% if row.known and row.known.is_expert_panel %}{{ ui.expert_panel_badge() }}{% endif %}
+                <div>{{ kb.mechanism_change(row.change.old_mechanism, row.change.new_mechanism) }}</div>
+                <div class="d-md-none mt-1">{{ kb.category_badge(row.change.category) }}</div>
+              </td>
+              <td class="d-none d-md-table-cell">{{ kb.category_badge(row.change.category) }}</td>
+              <td class="text-end num">{% if row.carriers %}<span class="kb-count">{{ row.carriers|number }}</span>{% else %}<span class="text-body-secondary" title="Carried by no patient">0</span>{% endif %}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="4">
+              {% if c.category %}
+              {{ ui.empty_state("funnel", "No change in this category", "Choose another category or show all changes.") }}
+              {% elif c.all_keys %}
+              {{ ui.empty_state("check2-circle", "The releases are identical", "No variant changed classification or mechanism.") }}
+              {% else %}
+              {% call ui.empty_state("check2-circle", "No stored patient variant changed", "Activating would not change any patient's alerts. Variants no patient carries may still differ.") %}
+                <a class="btn btn-outline-secondary" href="{{ url_for('knowledge.compare_releases', old=c.old.id, new=c.new.id, all=1) }}">Include all keys</a>
+              {% endcall %}
+              {% endif %}
+            </td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+    {{ ui.pagination(pagination, "knowledge.compare_releases", category=c.category, **link_args) }}
+  </div>
+
+  <div class="col-xl-4">
+    <section class="card card-table" aria-labelledby="genes-title">
+      <div class="card-header"><h2 class="card-heading" id="genes-title"><i class="bi bi-bar-chart-line" aria-hidden="true"></i> By gene</h2></div>
+      {% if c.genes %}
+      <div class="table-responsive">
+        <table class="table table-app table-sm align-middle gene-summary-table">
+          <thead><tr><th scope="col">Gene</th><th scope="col" class="text-end" title="Upgrades"><i class="bi bi-arrow-up-circle-fill cat-icon-upgrade" aria-hidden="true"></i><span class="visually-hidden">Upgrades</span></th><th scope="col" class="text-end" title="Downgrades"><i class="bi bi-arrow-down-circle-fill cat-icon-downgrade" aria-hidden="true"></i><span class="visually-hidden">Downgrades</span></th><th scope="col" class="text-end" title="Within a band"><i class="bi bi-arrow-left-right" aria-hidden="true"></i><span class="visually-hidden">Within a band</span></th><th scope="col" class="text-end">Carriers</th></tr></thead>
+          <tbody>
+            {% for gene in c.genes %}
+            <tr>
+              <th scope="row">{{ ui.gene(gene.gene) }}</th>
+              {{ kb.count_cell(gene.counts.upgrade) }}
+              {{ kb.count_cell(gene.counts.downgrade) }}
+              {{ kb.count_cell(gene.counts.within_actionable + gene.counts.within_non_actionable) }}
+              {{ kb.count_cell(gene.carriers) }}
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="card-body"><p class="small text-body-secondary mb-0">No gene has a changed variant.</p></div>
+      {% endif %}
+    </section>
+    <section class="card" aria-labelledby="legend-title">
+      <div class="card-header"><h2 class="card-heading" id="legend-title"><i class="bi bi-signpost-2" aria-hidden="true"></i> What an activation does</h2></div>
+      <div class="card-body">
+        <dl class="category-legend">
+          <dt>{{ kb.category_badge("upgrade") }}</dt><dd>Rules run for every carrier; new alerts are flagged reclassified, high priority, and notify clinicians.</dd>
+          <dt>{{ kb.category_badge("downgrade") }}</dt><dd>Alerts from the variant are superseded and a review notice asks the clinician to review any treatment change.</dd>
+          <dt>{{ kb.category_badge("within_actionable") }}</dt><dd>P ↔ LP: alerts stay; their provenance moves to the new release. No notification.</dd>
+          <dt>{{ kb.category_badge("within_non_actionable") }}</dt><dd>Among VUS, LB, B and not classified: provenance updated; a VUS monitoring note may be withdrawn silently.</dd>
+        </dl>
+      </div>
+    </section>
+  </div>
+</div>
+{% endif %}
+{% endif %}
+{% endblock %}

@@ -14,6 +14,7 @@ import logging
 
 from flask import Blueprint, current_app, flash, redirect, render_template, request, url_for
 from flask_login import current_user
+from flask_wtf import FlaskForm
 from werkzeug.wrappers import Response
 
 from ..constants import CLINICAL_ROLES
@@ -32,7 +33,12 @@ def _per_page() -> int:
     return int(current_app.config["ITEMS_PER_PAGE"])
 
 
-def _form_errors(form: ReviewAlertForm) -> str:
+def _current_path() -> str:
+    """Path and query of this request, used as the ``next`` target of forms posted from the page."""
+    return request.full_path.rstrip("?")
+
+
+def _form_errors(form: FlaskForm) -> str:
     return " ".join(error for errors in form.errors.values() for error in errors)
 
 
@@ -56,6 +62,7 @@ def inbox() -> str:
         summary=queries.inbox_summary(),
         statuses=queries.INBOX_STATUS_LABELS,
         kinds=queries.INBOX_KIND_LABELS,
+        return_url=_current_path(),
     )
 
 
@@ -107,7 +114,7 @@ def notices() -> str:
         per_page=_per_page(),
         error_out=False,
     )
-    next_url = request.full_path.rstrip("?")
+    next_url = _current_path()
     return render_template(
         "alerts/notices.html",
         pagination=pagination,

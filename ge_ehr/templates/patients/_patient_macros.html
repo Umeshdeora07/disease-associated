@@ -1,0 +1,130 @@
+{#- Macros shared by the patient and alert pages (UI-A). Use with:
+    {% import "patients/_patient_macros.html" as pm %}
+    breadcrumb, diabetes_type, severity_counts, review_stars, class_history, variant_cell,
+    finding_badges, provenance_timeline, patient_link -#}
+{% import "_macros.html" as ui %}
+
+{#- ``items`` is a list of (label, url) pairs; the last item is the current page (url ignored). -#}
+{% macro breadcrumb(items) -%}
+<nav class="app-breadcrumb" aria-label="Breadcrumb">
+  <ol class="breadcrumb">
+    {%- for label, url in items %}
+    {%- if loop.last %}
+    <li class="breadcrumb-item active" aria-current="page">{{ label }}</li>
+    {%- else %}
+    <li class="breadcrumb-item"><a href="{{ url }}">{{ label }}</a></li>
+    {%- endif %}
+    {%- endfor %}
+  </ol>
+</nav>
+{%- endmacro %}
+
+{% macro diabetes_type(diagnosis) -%}
+{%- set code = diagnosis.diabetes_type if diagnosis else "unknown" -%}
+<span class="dx-type dx-type-{{ code }}">{{ code|diabetes_type_label }}</span>
+{%- endmacro %}
+
+{#- Compact per-severity counts, e.g. two chips "1 High" and "1 Low"; ``counts`` maps severity → count. -#}
+{% macro severity_counts(counts, empty="None") -%}
+{%- if counts -%}
+<span class="sev-counts">
+  {%- for severity, count in counts.items() %}
+  <span class="sev-chip sev-chip-{{ severity }}" title="{{ count }} current {{ severity|severity_label|lower }}-severity alert{{ '' if count == 1 else 's' }}">
+    <span class="sev-chip-count">{{ count }}</span> {{ severity|severity_label }}</span>
+  {%- endfor %}
+</span>
+{%- else -%}
+<span class="text-body-secondary">{{ empty }}</span>
+{%- endif -%}
+{%- endmacro %}
+
+{#- ClinVar review stars (0–4); the review status text is given as tooltip and to screen readers. -#}
+{% macro review_stars(stars, status=none) -%}
+{%- set count = stars or 0 -%}
+{%- set description = count ~ " of 4 review stars" ~ (" (" ~ status|humanize ~ ")" if status else "") -%}
+<span class="review-stars" title="ClinVar review status: {{ description }}">
+  {%- for index in range(4) %}<i class="bi bi-star{{ '-fill' if index < count else '' }}" aria-hidden="true"></i>{% endfor -%}
+  <span class="visually-hidden">{{ description }}</span>
+</span>
+{%- endmacro %}
+
+{#- Class of a variant in every activated release, oldest first (``history`` of a ProfileVariant). -#}
+{% macro class_history(history) -%}
+{%- if history -%}
+<ol class="class-history" aria-label="Classification by release">
+  {%- for step in history %}
+  <li class="class-history-step" title="{{ step.release.label }}: {{ step.classification|class_label }}">
+    <span class="class-history-release">{{ release_short(step.release) }}</span>
+    <span class="badge badge-class badge-class-{{ step.classification|lower }}">{{ step.classification }}</span>
+    <span class="visually-hidden">in {{ step.release.label }} ({{ step.classification|class_label }})</span>
+  </li>
+  {%- endfor %}
+</ol>
+{%- else -%}
+<span class="text-body-secondary">No release activated</span>
+{%- endif -%}
+{%- endmacro %}
+
+{#- A release label without its parenthesised detail: "R1 (2025-01, synthetic)" → "R1" (full label as title). -#}
+{% macro release_short(release) -%}
+{%- if release %}<span class="release-short" title="{{ release.label }}">{{ release.label.split(" (", 1)[0] }}</span>{% else %}—{% endif -%}
+{%- endmacro %}
+
+{#- Gene symbol over the variant key, e.g. for alert rows. -#}
+{% macro variant_cell(gene, key_label) -%}
+<div class="variant-cell">
+  <span class="gene-symbol">{{ gene or "—" }}</span>
+  <code class="variant-key">{{ key_label }}</code>
+</div>
+{%- endmacro %}
+
+{% macro patient_link(patient, show_mrn=true) -%}
+<a class="row-link" href="{{ url_for('patients.view_patient', patient_id=patient.id) }}">{{ patient.display_name }}</a>
+{%- if show_mrn %}<div class="small text-body-secondary font-monospace">{{ patient.mrn }}</div>{% endif -%}
+{%- endmacro %}
+
+{#- Status, reclassified and priority badges of an alert (``status`` overrides the stored one, e.g. as of a past time). -#}
+{% macro finding_badges(alert, status=none) -%}
+{%- set shown = status or alert.status -%}
+<span class="finding-badges">
+  {{- ui.status_badge(shown) }}
+  {%- if alert.is_reclassified %}{{ ui.reclassified_badge() }}{% endif %}
+  {%- if alert.priority == "high" %}{{ ui.priority_badge("high") }}{% endif %}
+</span>
+{%- endmacro %}
+
+{#- Provenance events of an alert (AlertEvent list, oldest first). -#}
+{% macro provenance_timeline(events, compact=false) -%}
+{%- set meta = {
+  "created": ("plus-circle-fill", "Created"),
+  "confirmed": ("arrow-repeat", "Provenance updated"),
+  "reviewed": ("check2-circle", "Reviewed"),
+  "superseded": ("slash-circle-fill", "Superseded"),
+} -%}
+{%- if events -%}
+<ol class="prov-timeline{% if compact %} prov-timeline-compact{% endif %}">
+  {%- for event in events %}
+  {%- set icon, label = meta.get(event.event, ("circle", event.event|humanize)) %}
+  <li class="prov-timeline-item prov-timeline-{{ event.event }}">
+    <span class="prov-timeline-marker" aria-hidden="true"><i class="bi bi-{{ icon }}"></i></span>
+    <div class="prov-timeline-body">
+      <div class="prov-timeline-head">
+        <span class="prov-timeline-title">{{ label }}</span>
+        <time class="prov-timeline-time" datetime="{{ event.at.isoformat() }}Z">{{ event.at|dt }}</time>
+      </div>
+      <div class="prov-timeline-meta">
+        {%- if event.release %}<span><i class="bi bi-layers" aria-hidden="true"></i><span class="visually-hidden">Release: </span>{{ event.release.label }}</span>{% endif %}
+        {%- if event.rule_version %}<span><i class="bi bi-journal-medical" aria-hidden="true"></i><span class="visually-hidden">Rule version: </span>{{ event.rule_version.label }}</span>{% endif %}
+        {%- if event.classification %}<span><span class="visually-hidden">Classification: </span><span class="badge badge-class badge-class-{{ event.classification|lower }}" title="{{ event.classification|class_label }}">{{ event.classification }}</span></span>{% endif %}
+        {%- if event.run_id %}<span><a href="{{ url_for('knowledge.view_run', run_id=event.run_id) }}"><i class="bi bi-arrow-repeat" aria-hidden="true"></i>Run #{{ event.run_id }}</a></span>{% endif %}
+        {%- if event.user %}<span><i class="bi bi-person" aria-hidden="true"></i>{{ event.user.full_name }}</span>{% endif %}
+      </div>
+      {%- if event.detail and not compact %}<p class="prov-timeline-detail">{{ event.detail }}</p>{% endif %}
+    </div>
+  </li>
+  {%- endfor %}
+</ol>
+{%- else -%}
+<p class="text-body-secondary small mb-0">No provenance events recorded.</p>
+{%- endif -%}
+{%- endmacro %}

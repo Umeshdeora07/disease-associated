@@ -1,0 +1,332 @@
+{#- Patient page: header, decision-support summary (clinical roles), diagnosis, medications,
+    genomic profile and uploads. Editing controls are rendered for clinical roles only. -#}
+{% extends "base.html" %}
+{% import "_macros.html" as ui %}
+{% import "patients/_patient_macros.html" as pm %}
+{% block title %}{{ patient.display_name }}{% endblock %}
+{% block content %}
+{% set diagnosis = patient.diagnosis %}
+{{ pm.breadcrumb([("Patients", url_for("patients.list_patients")), (patient.display_name, none)]) }}
+
+{# ------------------------------------------------------------------ header #}
+<section class="card patient-hero" aria-labelledby="patient-name">
+  <div class="card-body">
+    <div class="patient-hero-main">
+      <div class="patient-avatar" aria-hidden="true">{{ patient.given_name[:1] }}{{ patient.family_name[:1] }}</div>
+      <div class="patient-hero-text">
+        <h1 class="patient-name" id="patient-name">{{ patient.display_name }}</h1>
+        <ul class="patient-facts" aria-label="Patient details">
+          <li><span class="visually-hidden">MRN: </span><span class="mrn-tag">{{ patient.mrn }}</span></li>
+          <li><i class="bi bi-calendar3" aria-hidden="true"></i>{{ age }} <span class="text-body-secondary">(born {{ patient.birth_date|date }})</span></li>
+          <li><i class="bi bi-gender-ambiguous" aria-hidden="true"></i><span class="visually-hidden">Sex: </span>{{ patient.sex|sex_label }}</li>
+          {% if patient.family_id %}
+          <li><i class="bi bi-diagram-3" aria-hidden="true"></i><span class="visually-hidden">Family: </span>
+            <a href="{{ url_for('patients.list_patients', family=patient.family_id) }}">Family {{ patient.family_id }}</a>
+            <span class="text-body-secondary">({{ relatives|length }} {{ "relative" if relatives|length == 1 else "relatives" }})</span></li>
+          {% endif %}
+          {% if patient.is_synthetic %}
+          <li><span class="badge badge-synthetic" title="Generated test data, not a real person"><i class="bi bi-cpu" aria-hidden="true"></i>Synthetic</span></li>
+          {% endif %}
+        </ul>
+      </div>
+    </div>
+    <div class="patient-hero-actions">
+      {% if show_alerts %}
+      <a class="btn btn-primary" href="{{ url_for('patients.recommendations', patient_id=patient.id) }}"><i class="bi bi-clipboard2-check" aria-hidden="true"></i> Recommendations</a>
+      {% endif %}
+      <a class="btn btn-outline-primary" href="{{ url_for('patients.upload_vcf', patient_id=patient.id) }}"><i class="bi bi-upload" aria-hidden="true"></i> Upload VCF</a>
+      {% if show_alerts %}
+      <a class="btn btn-outline-secondary" href="{{ url_for('api.patient_fhir', patient_id=patient.id, download=1) }}" download><i class="bi bi-filetype-json" aria-hidden="true"></i> Export FHIR</a>
+      <a class="btn btn-outline-secondary" href="{{ url_for('patients.edit_patient', patient_id=patient.id) }}"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</a>
+      {% endif %}
+    </div>
+  </div>
+  {% if relatives %}
+  <div class="patient-hero-footer">
+    <span class="text-body-secondary">Relatives:</span>
+    {% for relative in relatives %}
+    <a class="family-chip" href="{{ url_for('patients.view_patient', patient_id=relative.id) }}">{{ relative.display_name }} <span class="font-monospace">{{ relative.mrn }}</span></a>
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% if patient.notes %}<div class="patient-hero-footer patient-notes"><i class="bi bi-sticky" aria-hidden="true"></i><span>{{ patient.notes }}</span></div>{% endif %}
+</section>
+
+{# ------------------------------------------------------- decision support #}
+{% if show_alerts %}
+<section class="card summary-card" aria-labelledby="summary-title">
+  <div class="card-header">
+    <h2 class="card-title-text" id="summary-title"><i class="bi bi-bell" aria-hidden="true"></i> Decision support</h2>
+    <a class="btn btn-sm btn-outline-primary" href="{{ url_for('patients.recommendations', patient_id=patient.id) }}">Open recommendations <i class="bi bi-arrow-right" aria-hidden="true"></i></a>
+  </div>
+  <div class="card-body">
+    {% if summary.open_notices %}
+    <div class="alert alert-warning summary-notice" role="alert">
+      <i class="bi bi-clipboard2-pulse" aria-hidden="true"></i>
+      <div class="alert-body"><strong>{{ summary.open_notices }} open review notice{{ "" if summary.open_notices == 1 else "s" }}.</strong>
+        A variant was reclassified and alerts were superseded; review any treatment change made on their basis.
+        <a href="{{ url_for('patients.recommendations', patient_id=patient.id, _anchor='review-notices') }}">Review now</a></div>
+    </div>
+    {% endif %}
+    <div class="summary-grid">
+      <dl class="summary-stats">
+        <div class="summary-stat"><dt>Current alerts</dt><dd>{{ summary.total }}</dd></div>
+        <div class="summary-stat"><dt>Notes</dt><dd>{{ summary.notes }}</dd></div>
+        <div class="summary-stat"><dt>Superseded</dt><dd>{{ summary.superseded }}</dd></div>
+      </dl>
+      <div class="summary-alerts">
+        {% if summary.top_alerts %}
+        <ul class="summary-alert-list">
+          {% for alert in summary.top_alerts %}
+          <li>
+            {{ ui.severity_badge(alert.severity) }}
+            <a class="summary-alert-title" href="{{ url_for('alerts.view_alert', alert_id=alert.id, next=return_url) }}">
+              <span class="rule-chip">{{ alert.confirmed_rule_version.label }}</span>{{ alert.title }}</a>
+            {%- if alert.is_reclassified %} {{ ui.reclassified_badge() }}{% endif %}
+            {%- if alert.status == "reviewed" %} {{ ui.status_badge("reviewed") }}{% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+        {% if summary.total > summary.top_alerts|length %}<p class="small text-body-secondary mb-0">and {{ summary.total - summary.top_alerts|length }} more on the recommendations page.</p>{% endif %}
+        {% else %}
+        <p class="summary-empty"><i class="bi bi-check-circle" aria-hidden="true"></i>
+          {% if profile.variants %}No current alerts for this patient.{% else %}No alerts — upload a VCF to run decision support.{% endif %}</p>
+        {% endif %}
+      </div>
+    </div>
+    {{ ui.advisory_disclaimer() }}
+  </div>
+</section>
+{% endif %}
+
+<div class="row g-4 patient-columns">
+  {# ---------------------------------------------------------- diagnosis #}
+  <div class="col-lg-5">
+    <section class="card h-100" id="diagnosis" aria-labelledby="diagnosis-title">
+      <div class="card-header">
+        <h2 class="card-title-text" id="diagnosis-title"><i class="bi bi-clipboard2-pulse" aria-hidden="true"></i> Diagnosis</h2>
+        {% if show_alerts %}
+        <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#diagnosis-editor"
+                aria-expanded="{{ 'true' if diagnosis_form_open else 'false' }}" aria-controls="diagnosis-editor">
+          <i class="bi bi-pencil" aria-hidden="true"></i> Edit</button>
+        {% endif %}
+      </div>
+      <div class="card-body">
+        <dl class="dl-grid">
+          <dt>Diabetes type</dt><dd>{{ pm.diabetes_type(diagnosis) }}</dd>
+          <dt>Age at diagnosis</dt>
+          <dd>{% if diagnosis and diagnosis.age_at_diagnosis_months is not none %}{{ diagnosis.age_at_diagnosis_months|months_to_age }}
+            <span class="text-body-secondary">({{ diagnosis.age_at_diagnosis_months }} months)</span>
+            {%- if diagnosis.age_at_diagnosis_months < 12 %} <span class="badge badge-infancy" title="Relevant to rule D4">Diagnosed in infancy</span>{% endif %}
+            {%- else %}<span class="text-body-secondary">Not recorded</span>{% endif %}</dd>
+          <dt>Diagnosed on</dt><dd>{{ diagnosis.diagnosed_on|date if diagnosis else "—" }}</dd>
+          {% if diagnosis and diagnosis.notes %}<dt>Notes</dt><dd>{{ diagnosis.notes }}</dd>{% endif %}
+          <dt>Last updated</dt><dd class="text-body-secondary">{{ diagnosis.updated_at|dt if diagnosis else "—" }}</dd>
+        </dl>
+        {% if show_alerts %}
+        <div class="collapse inline-editor{% if diagnosis_form_open %} show{% endif %}" id="diagnosis-editor">
+          <form method="post" action="{{ url_for('patients.update_diagnosis', patient_id=patient.id) }}" novalidate aria-label="Edit diagnosis">
+            {{ diagnosis_form.hidden_tag() }}
+            {{ ui.render_form_errors(diagnosis_form) }}
+            {{ ui.render_field(diagnosis_form.diabetes_type) }}
+            <div class="row g-3 mb-3">
+              <div class="col-sm-6">{{ ui.render_field(diagnosis_form.age_at_diagnosis_months, wrapper_class="", min=0, inputmode="numeric") }}</div>
+              <div class="col-sm-6">{{ ui.render_field(diagnosis_form.diagnosed_on, wrapper_class="", max=today) }}</div>
+            </div>
+            {{ ui.render_field(diagnosis_form.notes) }}
+            <p class="form-text"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Saving re-evaluates decision support for this patient.</p>
+            <div class="form-actions mt-2">
+              <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-check2" aria-hidden="true"></i> Save diagnosis</button>
+              <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-toggle="collapse" data-bs-target="#diagnosis-editor" aria-controls="diagnosis-editor">Cancel</button>
+            </div>
+          </form>
+        </div>
+        {% endif %}
+      </div>
+    </section>
+  </div>
+
+  {# -------------------------------------------------------- medications #}
+  <div class="col-lg-7">
+    <section class="card h-100" id="medications" aria-labelledby="medications-title">
+      <div class="card-header">
+        <h2 class="card-title-text" id="medications-title"><i class="bi bi-capsule" aria-hidden="true"></i> Current diabetes medications</h2>
+        {% if show_alerts %}
+        <button class="btn btn-sm btn-outline-primary" type="button" data-bs-toggle="collapse" data-bs-target="#medication-editor"
+                aria-expanded="{{ 'true' if medication_form_open else 'false' }}" aria-controls="medication-editor">
+          <i class="bi bi-plus-lg" aria-hidden="true"></i> Add medication</button>
+        {% endif %}
+      </div>
+      {% if current_medications %}
+      <div class="table-responsive">
+        <table class="table table-app align-middle">
+          <thead>
+            <tr>
+              <th scope="col">Drug</th>
+              <th scope="col">Class</th>
+              <th scope="col" class="d-none d-sm-table-cell">Started</th>
+              {% if show_alerts %}<th scope="col" class="text-end"><span class="visually-hidden">Actions</span></th>{% endif %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for medication in current_medications %}
+            <tr>
+              <td><div class="fw-semibold">{{ medication.drug_name }}</div>{% if medication.dose %}<div class="small text-body-secondary">{{ medication.dose }}</div>{% endif %}</td>
+              <td><span class="drug-class drug-class-{{ medication.drug_class }}">{{ medication.drug_class|drug_class_label }}</span></td>
+              <td class="d-none d-sm-table-cell text-nowrap">{{ medication.start_date|date }}</td>
+              {% if show_alerts %}
+              <td class="text-end">
+                {{ ui.confirm_button(url_for('patients.stop_medication', patient_id=patient.id, medication_id=medication.id), "Stop",
+                                     "Stop " ~ medication.drug_name ~ " as of today? Decision support is re-evaluated; alerts that no longer apply are superseded.",
+                                     variant="outline-danger", icon="stop-circle", confirm_label="Stop medication", title="Stop medication") }}
+              </td>
+              {% endif %}
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="card-body pb-0">
+        <p class="muted-empty"><i class="bi bi-capsule" aria-hidden="true"></i> No current glucose-lowering medication recorded.</p>
+      </div>
+      {% endif %}
+      <div class="card-body pt-2">
+        {% if show_alerts %}
+        <div class="collapse inline-editor{% if medication_form_open %} show{% endif %}" id="medication-editor">
+          <form method="post" action="{{ url_for('patients.add_medication', patient_id=patient.id) }}" novalidate aria-label="Add medication">
+            {{ medication_form.hidden_tag() }}
+            {{ ui.render_form_errors(medication_form) }}
+            <div class="row g-3">
+              <div class="col-md-7">{{ ui.render_field(medication_form.drug_name, wrapper_class="", list="drug-suggestions") }}</div>
+              <div class="col-md-5">{{ ui.render_field(medication_form.drug_class, wrapper_class="") }}</div>
+              <div class="col-sm-6">{{ ui.render_field(medication_form.dose, wrapper_class="") }}</div>
+              <div class="col-sm-6">{{ ui.render_field(medication_form.start_date, wrapper_class="", max=today) }}</div>
+            </div>
+            <datalist id="drug-suggestions">
+              {% for name, class_label in drug_suggestions %}<option value="{{ name }}" label="{{ class_label }}"></option>{% endfor %}
+            </datalist>
+            <div class="form-actions">
+              <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add and re-evaluate</button>
+              <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-toggle="collapse" data-bs-target="#medication-editor" aria-controls="medication-editor">Cancel</button>
+            </div>
+          </form>
+        </div>
+        {% endif %}
+        {% if stopped_medications %}
+        <details class="stopped-medications">
+          <summary>Stopped medications ({{ stopped_medications|length }})</summary>
+          <ul class="stopped-list">
+            {% for medication in stopped_medications %}
+            <li><span class="fw-semibold">{{ medication.drug_name }}</span>
+              <span class="text-body-secondary">· {{ medication.drug_class|drug_class_label }}{% if medication.dose %} · {{ medication.dose }}{% endif %}
+              · {{ medication.start_date|date }} → {{ medication.end_date|date }}</span></li>
+            {% endfor %}
+          </ul>
+        </details>
+        {% endif %}
+      </div>
+    </section>
+  </div>
+</div>
+
+{# -------------------------------------------------------- genomic profile #}
+<section class="card card-table block-gap" id="genomic-profile" aria-labelledby="profile-title">
+  <div class="card-header">
+    <div>
+      <h2 class="card-title-text" id="profile-title"><i class="bi bi-diagram-2" aria-hidden="true"></i> Genomic profile</h2>
+      <p class="card-subtitle-text">
+        {% if profile.release %}Classified against <strong>{{ profile.release.label }}</strong>{% if profile.releases|length > 1 %} · history across {{ profile.releases|length }} activated releases{% endif %}
+        {% else %}No knowledge-base release is active, so variants are not classified yet.{% endif %}
+      </p>
+    </div>
+    {% if profile.variants %}
+    <div class="profile-counts">
+      <span class="count-pill count-pill-actionable">{{ profile.actionable_count }}</span> actionable
+      <span class="text-body-secondary">of {{ profile.variants|length }} panel variant{{ "" if profile.variants|length == 1 else "s" }}</span>
+    </div>
+    {% endif %}
+  </div>
+  {% if profile.variants %}
+  <div class="table-responsive">
+    <table class="table table-app align-middle profile-table">
+      <thead>
+        <tr>
+          <th scope="col">Gene</th>
+          <th scope="col">Variant</th>
+          <th scope="col" class="d-none d-md-table-cell">Zygosity</th>
+          <th scope="col">Classification</th>
+          <th scope="col" class="d-none d-lg-table-cell">Evidence</th>
+          <th scope="col" class="d-none d-md-table-cell">History</th>
+          <th scope="col" class="d-none d-xl-table-cell">Condition</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in profile.variants %}
+        {% set variant = row.variant %}
+        <tr>
+          <td><span class="gene-symbol">{{ variant.gene or "—" }}</span></td>
+          <td class="variant-col">
+            <code class="variant-key">{{ variant.variant_key.label }}</code>
+            {% if row.hgvs %}<div class="hgvs d-none d-sm-block" title="Genomic HGVS">{{ row.hgvs }}</div>{% endif %}
+            <div class="small text-body-secondary d-md-none">{{ variant.zygosity|humanize }}</div>
+          </td>
+          <td class="d-none d-md-table-cell">{{ variant.zygosity|humanize }}</td>
+          <td>
+            <div class="class-cell">
+              {{ ui.class_badge(variant.current_classification) }}
+              <span class="class-cell-label d-none d-sm-inline">{{ variant.current_classification|class_label }}</span>
+            </div>
+            <div class="class-flags">
+              {%- if variant.is_amended %}{{ ui.amended_badge() }}{% endif %}
+              {%- if row.changed_across_releases %}{{ ui.reclassified_badge() }}{% endif %}
+              {%- if row.known.is_expert_panel %}<span class="d-lg-none">{{ ui.expert_panel_badge() }}</span>{% endif %}
+            </div>
+            {% if variant.reported_classification != variant.current_classification %}
+            <div class="small text-body-secondary">First reported as {{ variant.reported_classification|class_label|lower }}</div>
+            {% endif %}
+          </td>
+          <td class="d-none d-lg-table-cell">
+            {% if row.known.known_variant_id %}
+            <div class="evidence-cell">
+              {{ pm.review_stars(row.known.review_stars, row.known.review_status) }}
+              {% if row.known.is_expert_panel %}{{ ui.expert_panel_badge() }}{% endif %}
+            </div>
+            {% else %}
+            <span class="text-body-secondary small">Not in the current release</span>
+            {% endif %}
+          </td>
+          <td class="d-none d-md-table-cell">{{ pm.class_history(row.history) }}</td>
+          <td class="d-none d-xl-table-cell condition-col">{{ row.known.condition or "—" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="card-footer profile-legend">
+    <span>{{ ui.amended_badge() }} classification changed since first report (FHIR status “amended”)</span>
+    <span>{{ ui.reclassified_badge() }} activated releases disagree</span>
+    <span>{{ ui.expert_panel_badge() }} ClinGen expert-panel classification</span>
+  </div>
+  {% else %}
+  <div class="card-body">
+    {% call ui.empty_state("diagram-2", "No genomic data yet", "Upload the patient's GRCh38 VCF. Variants in the seven-gene monogenic diabetes panel are classified against the current knowledge-base release.") %}
+      <a class="btn btn-primary" href="{{ url_for('patients.upload_vcf', patient_id=patient.id) }}"><i class="bi bi-upload" aria-hidden="true"></i> Upload VCF</a>
+    {% endcall %}
+  </div>
+  {% endif %}
+</section>
+
+{# ---------------------------------------------------------------- uploads #}
+<section class="card card-table block-gap" id="uploads" aria-labelledby="uploads-title">
+  <div class="card-header">
+    <h2 class="card-title-text" id="uploads-title"><i class="bi bi-file-earmark-medical" aria-hidden="true"></i> VCF uploads</h2>
+    {% if uploads %}<a class="btn btn-sm btn-outline-primary" href="{{ url_for('patients.upload_vcf', patient_id=patient.id) }}"><i class="bi bi-upload" aria-hidden="true"></i> Upload another</a>{% endif %}
+  </div>
+  {% if uploads %}
+  {% set compact = false %}{% include "patients/_uploads_table.html" %}
+  {% else %}
+  <div class="card-body"><p class="muted-empty"><i class="bi bi-file-earmark" aria-hidden="true"></i> No VCF has been uploaded for this patient.</p></div>
+  {% endif %}
+</section>
+{% endblock %}

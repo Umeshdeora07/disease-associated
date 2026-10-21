@@ -1,0 +1,101 @@
+{#- Knowledge-base releases: every imported ClinVar(-format) release with its activation state. -#}
+{% extends "base.html" %}
+{% import "_macros.html" as ui %}
+{% import "knowledge/_kb_macros.html" as kb with context %}
+{% block title %}Knowledge-base releases{% endblock %}
+{% block content %}
+{% call ui.page_header("Knowledge-base releases",
+    "ClinVar releases restricted to the seven panel genes. Each import is kept as its own release, so every alert can cite the evidence it was based on.",
+    icon="layers") %}
+  {% if pagination.total >= 2 %}
+  <a class="btn btn-outline-primary" href="{{ url_for('knowledge.compare_releases') }}"><i class="bi bi-arrow-left-right" aria-hidden="true"></i> Compare releases</a>
+  {% endif %}
+  {% if is_admin %}
+  <a class="btn btn-primary" href="{{ url_for('knowledge.import_release') }}"><i class="bi bi-upload" aria-hidden="true"></i> Import release</a>
+  {% endif %}
+{% endcall %}
+
+<div class="kb-note" role="note">
+  <i class="bi bi-info-circle" aria-hidden="true"></i>
+  <span>Activating a release makes it current and re-evaluates only the patients whose stored variants changed class.
+    {% if stored_keys %}{{ stored_keys|number }} distinct patient variant {{ "key is" if stored_keys == 1 else "keys are" }} stored, so an activation compares {{ "that key" if stored_keys == 1 else "those keys" }} — not the whole release.{% else %}No patient variants are stored yet.{% endif %}</span>
+</div>
+
+<div class="card card-table">
+  <div class="table-responsive">
+    <table class="table table-app align-middle release-table">
+      <thead>
+        <tr>
+          <th scope="col" class="col-seq text-center"><abbr title="Activation sequence">Seq</abbr></th>
+          <th scope="col">Release</th>
+          <th scope="col" class="d-none d-md-table-cell">Release date</th>
+          <th scope="col" class="text-end">Records</th>
+          <th scope="col" class="d-none d-lg-table-cell col-mix">Classes</th>
+          <th scope="col" class="d-none d-xl-table-cell">Genes</th>
+          <th scope="col" class="d-none d-md-table-cell">Imported</th>
+          <th scope="col" class="d-none d-sm-table-cell">Activated</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for release in pagination.items %}
+        {% set activation = activations.get(release.id) %}
+        <tr{% if release.is_current %} class="row-current"{% endif %}>
+          <td class="text-center">{% if release.sequence %}<span class="seq-pill">{{ release.sequence }}</span>{% else %}<span class="text-body-secondary" title="Never activated">—</span>{% endif %}</td>
+          <td class="release-cell">
+            <a class="fw-semibold" href="{{ url_for('knowledge.view_release', release_id=release.id) }}">{{ release.label }}</a>
+            <div class="badge-row">{{ kb.release_badges(release) }}</div>
+            <div class="small text-body-secondary file-name" title="Source file">{{ release.file_name or "—" }}</div>
+            <div class="small text-body-secondary d-md-none">Released {{ release.release_date|date }}</div>
+          </td>
+          <td class="d-none d-md-table-cell text-nowrap">{{ release.release_date|date }}</td>
+          <td class="text-end num">{{ release.record_count|number }}</td>
+          <td class="d-none d-lg-table-cell col-mix">
+            {{ kb.class_mix(release.class_counts) }}
+            <div class="mix-legend">
+              {%- for cls in C.CLASSES if release.class_counts.get(cls) %}<span><span class="mix-dot mix-dot-{{ cls|lower }}" aria-hidden="true"></span>{{ cls }} {{ release.class_counts[cls]|number }}</span>{% endfor -%}
+            </div>
+          </td>
+          <td class="d-none d-xl-table-cell">
+            {% if release.record_count %}
+            <details class="gene-details">
+              <summary>{{ release.gene_counts.values()|select|list|length }} of {{ C.GENES|length }} genes</summary>
+              <ul class="gene-count-list">
+                {% for gene in C.GENES %}<li>{{ ui.gene(gene) }}<span class="num">{{ release.gene_counts.get(gene, 0)|number }}</span></li>{% endfor %}
+              </ul>
+            </details>
+            {% else %}<span class="text-body-secondary">—</span>{% endif %}
+          </td>
+          <td class="d-none d-md-table-cell">
+            <div class="text-nowrap">{{ release.imported_at|dt }}</div>
+            <div class="small text-body-secondary">{{ release.imported_by.full_name if release.imported_by else "System" }}</div>
+          </td>
+          <td class="d-none d-sm-table-cell">
+            {% if release.activated_at %}
+            <div class="text-nowrap">{{ release.activated_at|dt }}</div>
+            <div class="small text-body-secondary">
+              {%- if activation %}{{ activation.initiated_by.full_name if activation.initiated_by else "System" }} · {{ kb.run_link(activation) }}{% else %}—{% endif -%}
+            </div>
+            {% else %}
+            <span class="text-body-secondary">Not activated</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="8">
+            {% if is_admin %}
+            {% call ui.empty_state("layers", "No knowledge-base release yet", "Import a ClinVar GRCh38 VCF (or the synthetic demo release) to start classifying patient variants. Until a release is active, every variant is “not classified”.") %}
+              <a class="btn btn-primary" href="{{ url_for('knowledge.import_release') }}"><i class="bi bi-upload" aria-hidden="true"></i> Import release</a>
+            {% endcall %}
+            {% else %}
+            {{ ui.empty_state("layers", "No knowledge-base release yet", "An administrator imports ClinVar releases. Until one is active, every patient variant is “not classified”.") }}
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{ ui.pagination(pagination, "knowledge.releases") }}
+{% endblock %}

@@ -24,9 +24,10 @@ from flask_login import current_user
 from werkzeug.wrappers import Response
 
 from .. import constants as C
+from ..alerts.forms import acknowledge_form
 from ..constants import CLINICAL_ROLES
 from ..extensions import db
-from ..models import GenomicUpload, Medication, Patient
+from ..models import GenomicUpload, Medication, Patient, utc_today
 from ..security import roles_required
 from ..services import patient_records
 from ..services.alerting import ReconcileResult
@@ -48,6 +49,16 @@ def _per_page() -> int:
 
 def _can_see_alerts() -> bool:
     return current_user.has_role(*CLINICAL_ROLES)
+
+
+def _current_path() -> str:
+    """Path and query of this request, used as the ``next`` target of forms posted from the page."""
+    return request.full_path.rstrip("?")
+
+
+def _today() -> str:
+    """Today (UTC) as the ``max`` of date inputs that cannot be in the future."""
+    return utc_today().isoformat()
 
 
 def _plural(count: int, singular: str, plural: str | None = None) -> str:
@@ -114,7 +125,8 @@ def new_patient() -> Response | tuple[str, int]:
             db.session.commit()
             flash(f"Patient {patient.display_name} ({patient.mrn}) created. Upload a VCF to add genomic data.", "success")
             return redirect(url_for("patients.view_patient", patient_id=patient.id))
-    return render_template("patients/form.html", form=form, patient=None), 400 if form.is_submitted() else 200
+    status = 400 if form.is_submitted() else 200
+    return render_template("patients/form.html", form=form, patient=None, today=_today()), status
 
 
 @bp.route("/<int:patient_id>/edit", methods=["GET", "POST"])
@@ -139,7 +151,8 @@ def edit_patient(patient_id: int) -> Response | tuple[str, int]:
             db.session.commit()
             flash(" ".join(filter(None, [f"Patient {patient.mrn} updated.", outcome])), "success")
             return redirect(url_for("patients.view_patient", patient_id=patient.id))
-    return render_template("patients/form.html", form=form, patient=patient), 400 if form.is_submitted() else 200
+    status = 400 if form.is_submitted() else 200
+    return render_template("patients/form.html", form=form, patient=patient, today=_today()), status
 
 
 def _save_patient(patient: Patient, form: PatientForm) -> str | None:
@@ -186,6 +199,8 @@ def _render_patient(
         "diagnosis_form_open": diagnosis_form is not None,
         "medication_form_open": medication_form is not None,
         "drug_suggestions": drug_suggestions(),
+        "today": _today(),
+        "return_url": url_for("patients.view_patient", patient_id=patient.id),
     }
     return render_template("patients/view.html", **context), status
 
@@ -350,14 +365,17 @@ def recommendations(patient_id: int) -> tuple[str, int]:
         except ValueError as exc:
             at_error = str(exc)
     view = queries.recommendations_as_of(patient, at) if at is not None else queries.recommendations_view(patient)
+    return_url = _current_path()
     return (
         render_template(
             "patients/recommendations.html",
             patient=patient,
             view=view,
-            at_value=at_value,
             at_error=at_error,
-            point_in_time_help=queries.POINT_IN_TIME_HELP,
+            return_url=return_url,
+            notice_forms={
+                notice.id: acknowledge_form(notice.id, formdata=None, next=return_url) for notice in view.open_notices
+            },
         ),
         400 if at_error else 200,
     )

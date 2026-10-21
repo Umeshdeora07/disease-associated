@@ -1,0 +1,86 @@
+{#- Laboratory dashboard (lab technicians): patients, VCF uploads, quick upload links. No alert information. -#}
+{% extends "base.html" %}
+{% import "_macros.html" as ui %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+{% call ui.page_header("Dashboard", "Laboratory overview: patients and their genomic uploads · as of " ~ (now|dt), icon="speedometer2") %}
+  <a class="btn btn-primary" href="{{ url_for('patients.list_patients') }}"><i class="bi bi-people" aria-hidden="true"></i> All patients</a>
+{% endcall %}
+
+<div class="row g-3 mb-4 kpi-row">
+  <div class="col-6 col-lg-3">{{ ui.stat_card("Patients", data.patients|number, "people", href=url_for('patients.list_patients'), hint="synthetic records") }}</div>
+  <div class="col-6 col-lg-3">{{ ui.stat_card("Awaiting a VCF", data.awaiting_vcf|number, "hourglass-split", tone="warning" if data.awaiting_vcf else "success", hint="no accepted upload yet") }}</div>
+  <div class="col-6 col-lg-3">{{ ui.stat_card("VCFs accepted", data.uploads_accepted|number, "check-circle-fill", tone="success") }}</div>
+  <div class="col-6 col-lg-3">{{ ui.stat_card("VCFs rejected", data.uploads_rejected|number, "x-circle-fill", tone="danger" if data.uploads_rejected else "primary", hint="kept for audit, no variants stored") }}</div>
+</div>
+
+<div class="row g-4">
+  <div class="col-xl-8">
+    <section class="card card-table" aria-labelledby="uploads-title">
+      <div class="card-header"><h2 class="card-heading" id="uploads-title"><i class="bi bi-file-earmark-arrow-up" aria-hidden="true"></i> Recent VCF uploads</h2></div>
+      {% if data.recent_uploads %}
+      <div class="table-responsive">
+        <table class="table table-app align-middle upload-table">
+          <thead><tr><th scope="col">Patient</th><th scope="col" class="d-none d-md-table-cell">File</th><th scope="col">Result</th><th scope="col" class="d-none d-sm-table-cell">Uploaded</th></tr></thead>
+          <tbody>
+            {% for upload in data.recent_uploads %}
+            <tr>
+              <td><a class="fw-semibold" href="{{ url_for('patients.view_patient', patient_id=upload.patient_id) }}">{{ upload.patient.display_name }}</a>
+                <div class="small text-body-secondary font-monospace">{{ upload.patient.mrn }}</div>
+                <div class="small text-body-secondary d-md-none text-break">{{ upload.filename }}</div></td>
+              <td class="d-none d-md-table-cell"><span class="font-monospace small text-break">{{ upload.filename }}</span><div class="small text-body-secondary">{{ upload.size_bytes|filesize }}</div></td>
+              <td>
+                {{ ui.status_badge(upload.status) }}
+                {% if upload.status == "accepted" %}
+                <div class="small text-body-secondary">{{ upload.panel_variants|number }} panel {{ "variant" if upload.panel_variants == 1 else "variants" }}{% if upload.off_panel_skipped %} · {{ upload.off_panel_skipped|number }} off-panel skipped{% endif %}</div>
+                {% else %}
+                <div class="small lab-upload-error">{{ upload.error|truncate(140) if upload.error else "Rejected" }}</div>
+                {% endif %}
+              </td>
+              <td class="d-none d-sm-table-cell"><div class="text-nowrap">{{ upload.uploaded_at|dt }}</div><div class="small text-body-secondary">{{ upload.uploaded_by.full_name if upload.uploaded_by else "System" }}</div></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="card-body">{{ ui.empty_state("file-earmark-arrow-up", "No VCF uploaded yet", "Open a patient and upload their VCF; accepted variants are classified against the current knowledge base.") }}</div>
+      {% endif %}
+    </section>
+  </div>
+
+  <div class="col-xl-4">
+    <section class="card" aria-labelledby="upload-title">
+      <div class="card-header"><h2 class="card-heading" id="upload-title"><i class="bi bi-upload" aria-hidden="true"></i> Upload a VCF</h2></div>
+      <div class="card-body">
+        <form method="get" action="{{ url_for('patients.list_patients') }}" role="search" aria-label="Find a patient">
+          <label class="form-label" for="lab-search">Find the patient</label>
+          <div class="input-group">
+            <input class="form-control" type="search" id="lab-search" name="q" placeholder="Name or MRN" autocomplete="off" maxlength="100">
+            <button class="btn btn-outline-primary" type="submit"><i class="bi bi-search" aria-hidden="true"></i><span class="visually-hidden">Search</span></button>
+          </div>
+        </form>
+        <hr class="form-divider">
+        <div class="kb-subhead">Awaiting a VCF</div>
+        {% if data.awaiting_patients %}
+        <ul class="quick-upload-list">
+          {% for patient in data.awaiting_patients %}
+          <li>
+            <div class="quick-upload-patient"><span class="fw-semibold">{{ patient.display_name }}</span><span class="small text-body-secondary font-monospace">{{ patient.mrn }}</span></div>
+            <a class="btn btn-sm btn-outline-primary" href="{{ url_for('patients.upload_vcf', patient_id=patient.id) }}" aria-label="Upload VCF for {{ patient.display_name }}"><i class="bi bi-upload" aria-hidden="true"></i> Upload</a>
+          </li>
+          {% endfor %}
+        </ul>
+        {% if data.awaiting_vcf > data.awaiting_patients|length %}<p class="small text-body-secondary mb-0">and {{ data.awaiting_vcf - data.awaiting_patients|length }} more.</p>{% endif %}
+        {% else %}
+        <p class="small text-body-secondary mb-0"><i class="bi bi-check2-circle" aria-hidden="true"></i> Every patient has an accepted VCF.</p>
+        {% endif %}
+      </div>
+    </section>
+    <div class="kb-note" role="note">
+      <i class="bi bi-shield-lock" aria-hidden="true"></i>
+      <span>Recommendations, alerts and review notices are visible to clinicians only. Uploads accept VCF 4.1–4.3 on GRCh38, up to {{ config.PATIENT_VCF_MAX_BYTES|filesize }}.</span>
+    </div>
+  </div>
+</div>
+{% endblock %}

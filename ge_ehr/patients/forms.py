@@ -117,10 +117,7 @@ _DIAGNOSIS_SERVICE_FIELDS: dict[str, str] = {
     "Age at diagnosis": "age_at_diagnosis_months",
     "Diagnosis date": "diagnosed_on",
 }
-_AGE_AT_DIAGNOSIS_HELP = (
-    "Whole months, e.g. 2 for neonatal diabetes or 180 for diagnosis at 15 years. "
-    "Rule D4 needs diagnosis before 12 months of age."
-)
+_AGE_AT_DIAGNOSIS_HELP = "Whole months, e.g. 2 (neonatal) or 180 (15 years). Rule D4 needs under 12."
 
 
 def _diabetes_type_field() -> SelectField:
@@ -291,7 +288,7 @@ class MedicationForm(ServiceErrorsMixin, FlaskForm):
     )
     drug_class = SelectField(
         "Drug class",
-        choices=[(SUGGEST_DRUG_CLASS, "Suggest from the drug name")] + _choices(C.DRUG_CLASSES, C.DRUG_CLASS_LABELS),
+        choices=[(SUGGEST_DRUG_CLASS, "Suggest from name")] + _choices(C.DRUG_CLASSES, C.DRUG_CLASS_LABELS),
         default=SUGGEST_DRUG_CLASS,
         description="The rules use the class, e.g. D2 does not fire for patients already on a sulfonylurea.",
     )

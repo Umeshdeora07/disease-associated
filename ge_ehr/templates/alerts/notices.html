@@ -1,0 +1,36 @@
+{#- Review notices raised when re-evaluation superseded alerts (downgrade or rule revision). -#}
+{% extends "base.html" %}
+{% import "_macros.html" as ui %}
+{% block title %}Review notices{% endblock %}
+{% block content %}
+{% call ui.page_header("Review notices", "Raised when a new knowledge-base release or rule revision supersedes an alert. GE-EHR never reverses therapy automatically: check whether treatment was changed on the basis of the superseded alert, then acknowledge.", icon="clipboard2-pulse") %}
+  <a class="btn btn-outline-secondary" href="{{ url_for('alerts.inbox') }}"><i class="bi bi-bell" aria-hidden="true"></i> Alerts inbox</a>
+{% endcall %}
+
+<nav class="notice-tabs" aria-label="Filter review notices by status">
+  {% for key, label in filter_labels.items() %}
+  <a class="notice-tab{% if key == status %} is-active{% endif %}" href="{{ url_for('alerts.notices', status=key) }}"{% if key == status %} aria-current="page"{% endif %}>
+    {{ label }} <span class="notice-tab-count">{{ counts[key] }}</span></a>
+  {% endfor %}
+</nav>
+
+<div class="notice-stack">
+  {% for notice in pagination.items %}
+  {% set form = forms.get(notice.id) %}{% set show_patient = true %}
+  {% include "alerts/_notice_card.html" %}
+  {% else %}
+  <div class="card">
+    <div class="card-body">
+      {% if status == "open" %}
+      {{ ui.empty_state("clipboard2-check", "No open review notices", "Notices appear when a variant is downgraded out of the actionable band or a rule revision withdraws an alert. Nothing needs your attention right now.") }}
+      {% elif status == "acknowledged" %}
+      {{ ui.empty_state("clipboard2", "No acknowledged notices yet", "Acknowledged notices are kept here with the comment and the clinician who acknowledged them.") }}
+      {% else %}
+      {{ ui.empty_state("clipboard2", "No review notices", "No re-evaluation has superseded an alert so far.") }}
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{{ ui.pagination(pagination, "alerts.notices", status=status) }}
+{% endblock %}

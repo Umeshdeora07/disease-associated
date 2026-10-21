@@ -1,0 +1,146 @@
+{#- One knowledge-base release: counts by gene × class, coverage, activation history, activation (admin). -#}
+{% extends "base.html" %}
+{% import "_macros.html" as ui %}
+{% import "knowledge/_kb_macros.html" as kb with context %}
+{% block title %}{{ release.label }}{% endblock %}
+{% block content %}
+{% set can_activate = is_admin and not release.is_current %}
+<nav aria-label="Breadcrumb"><ol class="breadcrumb kb-breadcrumb">
+  <li class="breadcrumb-item"><a href="{{ url_for('knowledge.releases') }}">Releases</a></li>
+  <li class="breadcrumb-item active" aria-current="page">{{ release.label }}</li>
+</ol></nav>
+{% call ui.page_header(release.label,
+    ("Synthetic ClinVar-format release" if release.is_synthetic else "ClinVar release") ~ " · " ~ (release.record_count|number) ~ " records in the seven panel genes",
+    icon="layers") %}
+  {% if detail.compare_old and detail.compare_new %}
+  <a class="btn btn-outline-primary" href="{{ url_for('knowledge.compare_releases', old=detail.compare_old.id, new=detail.compare_new.id) }}">
+    <i class="bi bi-arrow-left-right" aria-hidden="true"></i> Compare with {{ detail.compare_old.label }}</a>
+  {% endif %}
+  {% if can_activate %}
+  <a class="btn btn-primary" href="#activate"><i class="bi bi-lightning-charge-fill" aria-hidden="true"></i> Activate…</a>
+  {% endif %}
+{% endcall %}
+<div class="page-meta">
+  {{ kb.release_badges(release) }}
+  {% if release.sequence %}<span class="meta-item"><i class="bi bi-hash" aria-hidden="true"></i>Activation sequence {{ release.sequence }}</span>{% endif %}
+  {% if not release.activated_at %}<span class="meta-item"><i class="bi bi-pause-circle" aria-hidden="true"></i>Never activated</span>{% endif %}
+</div>
+
+<div class="row g-4">
+  <div class="col-xl-8 order-2 order-xl-1">
+    <section class="card card-table" aria-labelledby="counts-title">
+      <div class="card-header">
+        <h2 class="card-heading" id="counts-title"><i class="bi bi-grid-3x3" aria-hidden="true"></i> Records by gene and classification</h2>
+        <span class="small text-body-secondary">Expert-panel classifications take precedence</span>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-app align-middle count-table">
+          <thead>
+            <tr>
+              <th scope="col">Gene</th>
+              {% for cls in C.CLASSES %}<th scope="col" class="text-end">{{ ui.class_badge(cls) }}</th>{% endfor %}
+              <th scope="col" class="text-end">Total</th>
+              <th scope="col" class="d-none d-md-table-cell col-mix">Mix</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in detail.rows %}
+            <tr>
+              <th scope="row">{{ ui.gene(row.gene) }}</th>
+              {% for cls in C.CLASSES %}{{ kb.count_cell(row.counts[cls]) }}{% endfor %}
+              <td class="text-end num fw-semibold">{{ row.total|number }}</td>
+              <td class="d-none d-md-table-cell col-mix">{{ kb.class_mix(row.counts, label=row.gene ~ " records by classification") }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="{{ C.CLASSES|length + 3 }}">{{ ui.empty_state("inbox", "No records", "This release holds no record in the seven panel genes.") }}</td></tr>
+            {% endfor %}
+          </tbody>
+          {% if detail.rows %}
+          <tfoot>
+            <tr>
+              <th scope="row">All genes</th>
+              {% for cls in C.CLASSES %}<td class="text-end num">{{ detail.class_totals[cls]|number }}</td>{% endfor %}
+              <td class="text-end num">{{ release.record_count|number }}</td>
+              <td class="d-none d-md-table-cell col-mix">{{ kb.class_mix(detail.class_totals) }}</td>
+            </tr>
+          </tfoot>
+          {% endif %}
+        </table>
+      </div>
+    </section>
+
+    <section class="card card-table" aria-labelledby="activations-title">
+      <div class="card-header"><h2 class="card-heading" id="activations-title"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Activation history</h2></div>
+      {% if detail.activations %}
+      <div class="table-responsive">
+        <table class="table table-app align-middle">
+          <thead><tr><th scope="col">Run</th><th scope="col">Previous release</th><th scope="col" class="d-none d-md-table-cell">Strategy</th><th scope="col" class="text-end">Changed</th><th scope="col" class="text-end d-none d-sm-table-cell">Notifications</th><th scope="col">Status</th></tr></thead>
+          <tbody>
+            {% for run in detail.activations %}
+            <tr>
+              <td>{{ kb.run_link(run) }}<div class="small text-body-secondary text-nowrap">{{ run.started_at|dt }}</div></td>
+              <td>{{ kb.release_link(run.old_release, empty="None (initial classification)") }}</td>
+              <td class="d-none d-md-table-cell">{{ run.strategy|strategy_label }}</td>
+              {{ kb.count_cell(run.changed_variants) }}
+              {{ kb.count_cell(run.notifications, class_="d-none d-sm-table-cell") }}
+              <td>{{ ui.status_badge(run.status) }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="card-body">{{ ui.empty_state("hourglass-split", "Not activated yet", "Patients are classified against this release only after it is activated." if not is_admin else "Activate the release to make it current; its changes are applied to the patients who carry them.") }}</div>
+      {% endif %}
+    </section>
+  </div>
+
+  <div class="col-xl-4 order-1 order-xl-2">
+    <section class="card" aria-labelledby="details-title">
+      <div class="card-header"><h2 class="card-heading" id="details-title"><i class="bi bi-card-list" aria-hidden="true"></i> Release details</h2></div>
+      <div class="card-body">
+        <dl class="dl-grid dl-compact">
+          <dt>Source</dt><dd>{{ "Synthetic (not real ClinVar data)" if release.is_synthetic else "ClinVar" }}</dd>
+          <dt>Release date</dt><dd>{{ release.release_date|date }}</dd>
+          <dt>File</dt><dd class="text-break font-monospace small">{{ release.file_name or "—" }}</dd>
+          <dt>File date</dt><dd>{{ release.file_date or "—" }}</dd>
+          <dt>SHA-256</dt><dd><code class="sha" title="{{ release.file_sha256 or '' }}">{{ (release.file_sha256 or "—")[:16] }}{% if release.file_sha256 %}…{% endif %}</code></dd>
+          <dt>Records</dt><dd>{{ release.record_count|number }}</dd>
+          <dt>Expert panel</dt><dd>{{ detail.expert_panel|number }} {{ ui.expert_panel_badge() if detail.expert_panel }}{% if detail.overlay_overrides %}<div class="small text-body-secondary">{{ detail.overlay_overrides|number }} from an overlay CSV</div>{% endif %}</dd>
+          <dt>Imported</dt><dd>{{ release.imported_at|dt }}<div class="small text-body-secondary">{{ release.imported_by.full_name if release.imported_by else "System" }}</div></dd>
+          <dt>Activated</dt><dd>{{ release.activated_at|dt }}</dd>
+          {% if release.notes %}<dt>Notes</dt><dd>{{ release.notes }}</dd>{% endif %}
+        </dl>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="coverage-title">
+      <div class="card-header"><h2 class="card-heading" id="coverage-title"><i class="bi bi-people" aria-hidden="true"></i> Patient variant coverage</h2></div>
+      <div class="card-body">
+        {% if detail.stored_keys %}
+        <div class="coverage-figure"><span class="coverage-value">{{ detail.stored_keys_listed|number }}</span><span class="coverage-of">of {{ detail.stored_keys|number }}</span></div>
+        <p class="small text-body-secondary mb-0">stored patient variant keys are listed in this release. Keys it does not list are reported as “not classified”, never as VUS.</p>
+        {% else %}
+        <p class="small text-body-secondary mb-0">No patient variants are stored yet.</p>
+        {% endif %}
+      </div>
+    </section>
+
+    {% if can_activate %}
+    <section class="card card-activate" id="activate" aria-labelledby="activate-title">
+      <div class="card-header"><h2 class="card-heading" id="activate-title"><i class="bi bi-lightning-charge-fill" aria-hidden="true"></i> Activate this release</h2></div>
+      <form class="card-body" method="post" action="{{ url_for('knowledge.activate_release', release_id=release.id) }}">
+        {{ form.csrf_token }}
+        <p class="small mb-3">{% if detail.compare_old %}Replaces <strong>{{ detail.compare_old.label }}</strong> as the current release. {% endif %}Carriers of every changed stored variant are re-evaluated; upgrades notify clinicians and downgrades raise review notices.
+          {% if detail.compare_old %}<a href="{{ url_for('knowledge.compare_releases', old=detail.compare_old.id, new=release.id) }}">Review the changes first</a>.{% endif %}</p>
+        {{ ui.render_field(form.strategy) }}
+        <button type="submit" class="btn btn-primary w-100"
+                data-confirm="Make “{{ release.label }}” the current release and re-evaluate the affected patients now? Alerts are created or superseded and clinicians are notified of outcome changes."
+                data-confirm-title="Activate release" data-confirm-label="Activate and re-evaluate">
+          <i class="bi bi-lightning-charge-fill" aria-hidden="true"></i> Activate and re-evaluate</button>
+      </form>
+    </section>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

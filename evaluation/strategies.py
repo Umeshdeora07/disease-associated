@@ -76,7 +76,15 @@ from ge_ehr.services import alerting, clinvar, patient_records, reevaluation
 from ge_ehr.services.clinvar import ClinVarRecord
 
 from . import knowledge
-from .cohort import REFERENCE_DATE, CohortMedication, CohortPatient, VcfVariant, format_patient_vcf, make_families, months_between
+from .cohort import (
+    REFERENCE_DATE,
+    CohortMedication,
+    CohortPatient,
+    VcfVariant,
+    format_patient_vcf,
+    make_families,
+    months_between,
+)
 from .knowledge import CHANGE_KINDS, KATP_GENES, Key, KnownRecord, key_label
 
 logger = logging.getLogger(__name__)
@@ -101,7 +109,7 @@ STABLE_ROLES: dict[str, str] = {
     "stable_novel": "private variant absent from ClinVar (NC), unchanged",
 }
 NOVEL_ROLES: frozenset[str] = frozenset({"nc_to_lp", "stable_novel"})
-CATEGORY_ROLE_LABELS: dict[str, str] = {category: label for category, label in C.CHANGE_CATEGORY_LABELS.items()}
+CATEGORY_ROLE_LABELS: dict[str, str] = dict(C.CHANGE_CATEGORY_LABELS)  # roles of a real release pair
 
 # Gene of a selected variant (monogenic-diabetes carriers: GCK and HNF1A dominate).
 CARRIER_GENE_WEIGHTS: dict[str, float] = {
@@ -198,7 +206,10 @@ GENE_PROFILE_MIX: dict[str, tuple[tuple[str, float], ...]] = {
     "HNF1B": (("insulin", 0.55), ("metformin", 0.25), ("untreated", 0.20)),
     "INS": (("insulin", 0.80), ("untreated", 0.20)),
 }
-KATP_ACTIVATING_PROFILE_MIX: tuple[tuple[str, float], ...] = (("neonatal_insulin", 0.75), ("neonatal_sulfonylurea", 0.25))
+KATP_ACTIVATING_PROFILE_MIX: tuple[tuple[str, float], ...] = (
+    ("neonatal_insulin", 0.75),
+    ("neonatal_sulfonylurea", 0.25),
+)
 UNAFFECTED_RELATIVE_SHARE = 0.35
 NEONATAL_ONSET_MAX_MONTHS = 9
 MODY_ONSET_MONTHS = (120, 420)  # typical onset 10–35 years
@@ -398,9 +409,7 @@ class CohortPlan:
             "overrides": len(self.overrides),
             "overrides_by_field": dict(sorted(Counter(item.field for item in self.overrides).items())),
             "patients_with_overrides": len({item.mrn for item in self.overrides}),
-            "scenarios": {
-                planned.mrn: planned.scenario for planned in self.patients if planned.scenario is not None
-            },
+            "scenarios": {planned.mrn: planned.scenario for planned in self.patients if planned.scenario is not None},
         }
 
 
@@ -418,7 +427,7 @@ class BackgroundPool:
         keys, weights = list(self.keys), list(self.weights)
         chosen: list[Key] = []
         for _ in range(count):
-            index = _weighted(rng, list(zip(range(len(keys)), weights)))
+            index = _weighted(rng, list(zip(range(len(keys)), weights, strict=True)))
             chosen.append(keys.pop(index))
             weights.pop(index)
         return chosen
@@ -709,7 +718,9 @@ class _Planner:
         start = diagnosed + timedelta(days=self.rng.randint(0, 365))
         return max(patient.birth_date, min(start, REFERENCE_DATE))
 
-    def set_clinical(self, index: int, diabetes_type: str, age: int | None, drug_class: str | None, reason: str) -> None:
+    def set_clinical(
+        self, index: int, diabetes_type: str, age: int | None, drug_class: str | None, reason: str
+    ) -> None:
         """Exact clinical state of a scenario patient."""
         self.set_diagnosis(index, diabetes_type, age, reason)
         self.set_therapy(index, drug_class, DRUG_NAMES[drug_class] if drug_class else None, reason)
@@ -740,11 +751,13 @@ class _Planner:
                     "variants need single carriers; use a larger cohort or fewer selected variants."
                 )
             family_iter, single_iter = iter(families), iter(singles)
-            groups = [next(family_iter) if slot in family_slots else [next(single_iter)] for slot in range(len(selections))]
+            groups = [
+                next(family_iter) if slot in family_slots else [next(single_iter)] for slot in range(len(selections))
+            ]
         elif len(selections) > len(groups):
             raise ValueError(f"{len(selections)} selected variants but only {len(groups)} carrier groups.")
         carriers: list[int] = []
-        for (role, key), group in zip(selections, groups):
+        for (role, key), group in zip(selections, groups, strict=False):  # spare groups stay non-carriers
             self.roles[key] = role
             gene = C.gene_for_position(key[0], key[1]) or ""
             activating = key in activating_keys or role == "katp_activating"
@@ -755,7 +768,9 @@ class _Planner:
                 if profile is not None:
                     relation = "relative carrying" if position else "carrier of"
                     self.apply_profile(
-                        index, profile, f"{relation} {gene} {key_label(key)} ({role_label(role)}): profile {profile.name}"
+                        index,
+                        profile,
+                        f"{relation} {gene} {key_label(key)} ({role_label(role)}): profile {profile.name}",
                     )
         return carriers
 
@@ -767,7 +782,9 @@ class _Planner:
                 variants=tuple((*key, zygosity) for key, zygosity in sorted(variants.items())),
                 scenario=scenario,
             )
-            for mrn, patient, variants, scenario in zip(self.mrns, self.patients, self.variants, self.scenarios)
+            for mrn, patient, variants, scenario in zip(
+                self.mrns, self.patients, self.variants, self.scenarios, strict=True
+            )
         )
         return CohortPlan(
             name=self.name,
@@ -838,7 +855,7 @@ def plan_correctness_cohort(
             f"The correctness cohort needs at least {len(SCENARIOS)} patients outside families for the "
             f"scenarios; it has {len(singles)}."
         )
-    for scenario, index in zip(SCENARIOS, singles):
+    for scenario, index in zip(SCENARIOS, singles, strict=False):  # the first singles
         planner.scenarios[index] = scenario.code
         for name in scenario.keys:
             planner.carry(index, planner.scenario_keys[name])
@@ -853,9 +870,11 @@ def plan_correctness_cohort(
         diabetes_type, age, drug_class = RS6_MEMBER_STATES[position % len(RS6_MEMBER_STATES)]
         planner.scenarios[index] = "RS6"
         planner.carry(index, planner.scenario_keys[RS6_KEY])
-        planner.set_clinical(index, diabetes_type, age, drug_class, "scenario RS6: family sharing an upgraded HNF4A VUS")
+        planner.set_clinical(
+            index, diabetes_type, age, drug_class, "scenario RS6: family sharing an upgraded HNF4A VUS"
+        )
 
-    groups = [*families[1:], *([index] for index in singles[len(SCENARIOS):])]
+    groups = [*families[1:], *([index] for index in singles[len(SCENARIOS) :])]
     pools = synthetic_role_pools(base, planner.used)
     selections: list[tuple[str, Key]] = []
     for role in CORRECTNESS_COVERAGE_ROLES[: len(groups)]:
@@ -901,7 +920,9 @@ def plan_scale_cohort(
             key = planner.pick_key(pools, role)
             if key is None:
                 if strict:
-                    raise ValueError(f"Only {picked} candidate key(s) for role {role} ({role_label(role)}); {count} needed.")
+                    raise ValueError(
+                        f"Only {picked} candidate key(s) for role {role} ({role_label(role)}); {count} needed."
+                    )
                 logger.warning("Role %s: only %d of %d requested keys available", role, picked, count)
                 break
             selections.append((role, key))
@@ -961,8 +982,10 @@ def evaluation_app(db_path: Path) -> Flask:
     """An isolated GE-EHR app on the SQLite file ``db_path`` (independent of the environment's settings).
 
     SQLite runs in its default rollback-journal mode (no WAL); CSRF is off so the test client can
-    sign in (scenario S12); password hashing is cheap because only throw-away users are created;
-    GE-EHR logs only errors (the expected "access denied" warning of S12 would be noise).
+    sign in (scenario S12); a failing page answers 500 instead of raising into the harness, so an
+    access check reports a status code; password hashing is cheap because only throw-away users
+    are created; GE-EHR logs only errors (the expected "access denied" warning of S12 would be
+    noise).
     """
     return create_app(
         {
@@ -970,6 +993,7 @@ def evaluation_app(db_path: Path) -> Flask:
             "SQLALCHEMY_ENGINE_OPTIONS": {},
             "SECRET_KEY": secrets.token_hex(32),
             "TESTING": True,
+            "PROPAGATE_EXCEPTIONS": False,
             "WTF_CSRF_ENABLED": False,
             "SESSION_COOKIE_SECURE": False,
             "REMEMBER_COOKIE_SECURE": False,
@@ -978,7 +1002,6 @@ def evaluation_app(db_path: Path) -> Flask:
             "TRUSTED_PROXIES": 0,
         }
     )
-
 
 
 INSERT_BATCH = 1_000
@@ -1028,14 +1051,16 @@ class _Lookup:
     """Patient MRNs and variant keys by id (one query each), to express alerts as :class:`FindingId`."""
 
     def __init__(self) -> None:
-        self.mrns: dict[int, str] = dict(db.session.execute(select(Patient.id, Patient.mrn)).tuples().all())
+        self.mrns: dict[int, str] = {row.id: row.mrn for row in db.session.execute(select(Patient.id, Patient.mrn))}
         columns = (VariantKey.id, VariantKey.chrom, VariantKey.pos, VariantKey.ref, VariantKey.alt)
         self.keys: dict[int, Key] = {
             row.id: (row.chrom, row.pos, row.ref, row.alt) for row in db.session.execute(select(*columns))
         }
 
     def finding(self, row: Any) -> FindingId:
-        return FindingId(self.mrns[row.patient_id], row.rule_code, self.keys[row.variant_key_id], row.kind, row.severity)
+        return FindingId(
+            self.mrns[row.patient_id], row.rule_code, self.keys[row.variant_key_id], row.kind, row.severity
+        )
 
 
 def _ms(clock: float) -> float:
@@ -1052,7 +1077,9 @@ def capture_state(lookup: _Lookup, at: datetime) -> StateCapture:
     for row in db.session.execute(statement):
         ids[row.patient_id].add(row.id)
         findings.add(lookup.finding(row))
-    return StateCapture(at, {patient_id: frozenset(alert_ids) for patient_id, alert_ids in ids.items()}, frozenset(findings))
+    return StateCapture(
+        at, {patient_id: frozenset(alert_ids) for patient_id, alert_ids in ids.items()}, frozenset(findings)
+    )
 
 
 def build_baseline(
@@ -1145,7 +1172,10 @@ def _ingest_vcfs(plan: CohortPlan, vcf_dir: Path | None) -> None:
         )
         for medication in source.medications:
             patient_records.add_medication(
-                patient, drug_name=medication.drug_name, drug_class=medication.drug_class, start_date=medication.start_date
+                patient,
+                drug_name=medication.drug_name,
+                drug_class=medication.drug_class,
+                start_date=medication.start_date,
             )
         text = format_patient_vcf(planned.mrn, planned.variants)
         if vcf_dir is not None:
@@ -1225,7 +1255,14 @@ def _variant_key_ids(keys: Collection[Key]) -> dict[Key, int]:
     for offset, (chrom, pos, ref, alt) in enumerate(missing):
         stored[(chrom, pos, ref, alt)] = next_id + offset
         rows.append(
-            {"id": next_id + offset, "chrom": chrom, "pos": pos, "ref": ref, "alt": alt, "gene": C.gene_for_position(chrom, pos)}
+            {
+                "id": next_id + offset,
+                "chrom": chrom,
+                "pos": pos,
+                "ref": ref,
+                "alt": alt,
+                "gene": C.gene_for_position(chrom, pos),
+            }
         )
     _insert(VariantKey, rows)
     return {key: stored[key] for key in keys}
@@ -1313,7 +1350,9 @@ def _run_info(run: ReevaluationRun | None) -> dict[str, Any] | None:
     if run is None:
         return None
     info: dict[str, Any] = {name: getattr(run, name) for name in RUN_COUNTERS}
-    info.update(id=run.id, strategy=run.strategy, trigger=run.trigger, status=run.status, engine_duration_ms=run.duration_ms)
+    info.update(
+        id=run.id, strategy=run.strategy, trigger=run.trigger, status=run.status, engine_duration_ms=run.duration_ms
+    )
     summary = run.summary or {}
     for name in ("categories", "rules", "superseded_by_reason"):
         if name in summary:
@@ -1354,12 +1393,16 @@ def _apply_change(
             if row.created_at >= started:
                 new.add(finding)
                 if row.notify:
-                    notifications.append(Notification("alert", finding.mrn, finding.key, finding.rule_code, finding.severity))
+                    notifications.append(
+                        Notification("alert", finding.mrn, finding.key, finding.rule_code, finding.severity)
+                    )
         else:
             superseded.add(finding)
     notices = select(ReviewNotice.patient_id, ReviewNotice.variant_key_id).where(ReviewNotice.created_at >= started)
     for row in db.session.execute(notices):
-        notifications.append(Notification("review_notice", lookup.mrns[row.patient_id], lookup.keys[row.variant_key_id], None, None))
+        notifications.append(
+            Notification("review_notice", lookup.mrns[row.patient_id], lookup.keys[row.variant_key_id], None, None)
+        )
     changed_keys = None
     if run is not None:
         key_ids = db.session.scalars(select(VariantChange.variant_key_id).where(VariantChange.run_id == run.id))
@@ -1374,7 +1417,9 @@ def _apply_change(
         state=frozenset(state),
         new_findings=frozenset(new),
         superseded=frozenset(superseded),
-        notifications=tuple(sorted(notifications, key=lambda item: (item.channel, item.mrn, item.key, item.rule_code or ""))),
+        notifications=tuple(
+            sorted(notifications, key=lambda item: (item.channel, item.mrn, item.key, item.rule_code or ""))
+        ),
         run=_run_info(run),
         changed_keys=changed_keys,
     )

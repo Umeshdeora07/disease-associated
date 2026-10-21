@@ -1,0 +1,73 @@
+{#- Macros of the knowledge pages (UI-B). Use with: {% import "knowledge/_kb_macros.html" as kb %}
+    category_badge, class_change, mechanism_change, release_badges, release_link, run_link,
+    trigger_label, rule_changes, class_mix, count_cell -#}
+{% import "_macros.html" as ui %}
+
+{% macro category_badge(category) -%}
+{%- set icons = {"upgrade": "arrow-up-circle-fill", "downgrade": "arrow-down-circle-fill",
+                 "within_actionable": "arrow-left-right", "within_non_actionable": "arrow-left-right"} -%}
+{%- set short = {"upgrade": "Upgrade", "downgrade": "Downgrade",
+                 "within_actionable": "Within actionable", "within_non_actionable": "Within non-actionable"} -%}
+<span class="badge badge-category badge-category-{{ category|replace('_', '-') }}" title="{{ category|category_label }}">
+  <i class="bi bi-{{ icons.get(category, 'circle') }}" aria-hidden="true"></i>{{ short.get(category, category|humanize) }}</span>
+{%- endmacro %}
+
+{% macro class_change(old, new) -%}
+<span class="kb-class-change">{{ ui.class_badge(old) }}<i class="bi bi-arrow-right" aria-hidden="true"></i><span class="visually-hidden"> to </span>{{ ui.class_badge(new) }}</span>
+{%- endmacro %}
+
+{% macro mechanism_change(old, new) -%}
+{%- if old != new -%}
+<span class="mechanism-change"><i class="bi bi-lightning-charge" aria-hidden="true"></i>Mechanism {{ (old or "unknown")|mechanism_label|lower }} → {{ (new or "unknown")|mechanism_label|lower }}</span>
+{%- endif -%}
+{%- endmacro %}
+
+{% macro release_badges(release, current=true) -%}
+{%- if current and release.is_current %}<span class="badge badge-current"><i class="bi bi-check-circle-fill" aria-hidden="true"></i>Current</span>{% endif -%}
+{%- if release.is_synthetic %}<span class="badge badge-source-synthetic" title="Synthetic ClinVar-format data, not real ClinVar"><i class="bi bi-cpu" aria-hidden="true"></i>Synthetic</span>
+{%- else %}<span class="badge badge-source-clinvar" title="Real ClinVar data"><i class="bi bi-database-fill" aria-hidden="true"></i>ClinVar</span>{% endif -%}
+{%- endmacro %}
+
+{% macro release_link(release, empty="No release") -%}
+{%- if release -%}<a href="{{ url_for('knowledge.view_release', release_id=release.id) }}">{{ release.label }}</a>
+{%- else -%}<span class="text-body-secondary">{{ empty }}</span>{%- endif -%}
+{%- endmacro %}
+
+{% macro run_link(run) -%}
+<a class="run-id" href="{{ url_for('knowledge.view_run', run_id=run.id) }}">Run #{{ run.id }}</a>
+{%- endmacro %}
+
+{% macro trigger_label(trigger) -%}
+{%- set icons = {"clinvar_release": "layers", "rule_revision": "journal-medical", "full_recompute": "arrow-repeat",
+                 "vcf_upload": "file-earmark-arrow-up", "medication_change": "capsule", "diagnosis_change": "clipboard2-pulse",
+                 "manual": "hand-index"} -%}
+<span class="trigger-label"><i class="bi bi-{{ icons.get(trigger, 'circle') }}" aria-hidden="true"></i>{{ trigger|trigger_label }}</span>
+{%- endmacro %}
+
+{#- ``changes``: list of {code, old_version, new_version} (ReevaluationRun.rule_change). -#}
+{% macro rule_changes(changes) -%}
+{%- for change in changes -%}
+<span class="version-chip version-chip-change">{{ change.code }}
+  {%- if change.old_version is not none %} v{{ change.old_version }} <i class="bi bi-arrow-right" aria-hidden="true"></i><span class="visually-hidden"> to</span> v{{ change.new_version }}
+  {%- else %} v{{ change.new_version }} <span class="version-chip-note">new</span>{% endif -%}
+</span>
+{%- else -%}<span class="text-body-secondary">No rule changed</span>
+{%- endfor -%}
+{%- endmacro %}
+
+{#- Stacked proportional bar of classification counts (inline SVG; no inline styles). -#}
+{% macro class_mix(counts, label="Records by classification") -%}
+{%- set segments = proportion_segments(counts or {}, C.CLASSES) -%}
+{%- if segments -%}
+<svg class="mix-bar" viewBox="0 0 100 8" preserveAspectRatio="none" role="img"
+     aria-label="{{ label }}: {% for s in segments %}{{ s.key|class_label }} {{ s.count|number }}{% if not loop.last %}, {% endif %}{% endfor %}">
+  {%- for s in segments %}<rect class="mix-{{ s.key|lower }}" x="{{ s.offset }}" y="0" width="{{ s.width }}" height="8"></rect>{% endfor -%}
+</svg>
+{%- else -%}<span class="text-body-secondary small">No records</span>
+{%- endif -%}
+{%- endmacro %}
+
+{#- A counter cell: the number, muted when zero. -#}
+{% macro count_cell(value, class_="") -%}
+<td class="text-end num{% if not value %} num-zero{% endif %}{% if class_ %} {{ class_ }}{% endif %}">{{ value|number if value else "0" }}</td>
+{%- endmacro %}

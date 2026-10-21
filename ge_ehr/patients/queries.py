@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from itertools import batched
 
 from sqlalchemy import Select, and_, func, or_, select
@@ -40,6 +40,7 @@ from ..models import (
 from ..services import classification, reevaluation
 from ..services.classification import IN_CLAUSE_CHUNK, KnownClass
 from ..services.rules import rule_code_sort_key
+from ..templating import months_to_age
 
 #: Severities in display order (alerts are grouped by these on the recommendations page).
 SEVERITY_GROUPS: tuple[str, ...] = tuple(sorted(C.SEVERITIES, key=lambda severity: -C.SEVERITY_ORDER[severity]))
@@ -47,7 +48,7 @@ SEVERITY_GROUPS: tuple[str, ...] = tuple(sorted(C.SEVERITIES, key=lambda severit
 SUMMARY_ALERT_LIMIT = 5
 #: Change points offered as shortcuts by the point-in-time selector.
 CHANGE_POINT_LIMIT = 8
-#: Accepted ``?at=`` formats are those of :meth:`datetime.fromisoformat` (``YYYY-MM-DDTHH:MM[:SS[.ffffff]]``).
+#: Accepted ``?at=`` formats are those of :meth:`datetime.fromisoformat` (``YYYY-MM-DDTHH:MM[:SS[.fff]]``).
 POINT_IN_TIME_HELP = "Enter a date and time as YYYY-MM-DDTHH:MM (UTC), e.g. 2026-01-15T09:30."
 
 
@@ -66,10 +67,7 @@ def age_text(birth_date: date, on: date | None = None) -> str:
     """Age for display: ``"8 months"`` below two years, otherwise ``"34 years"``."""
     today = on or utc_today()
     months = (today.year - birth_date.year) * 12 + today.month - birth_date.month - (today.day < birth_date.day)
-    months = max(months, 0)
-    if months < 24:
-        return "1 month" if months == 1 else f"{months} months"
-    return f"{months // 12} years"
+    return months_to_age(max(months, 0))
 
 
 def parse_point_in_time(value: str) -> datetime:
@@ -84,6 +82,41 @@ def parse_point_in_time(value: str) -> datetime:
     if moment.tzinfo is not None:
         moment = moment.astimezone(UTC).replace(tzinfo=None)
     return moment
+
+
+def point_in_time_value(moment: datetime) -> str:
+    """``?at=`` / ``datetime-local`` value of ``moment`` with only the precision it needs.
+
+    Minutes, seconds or milliseconds (``2026-01-15T09:30``, ``…T09:30:15``, ``…T09:30:15.250``):
+    the demo dataset records several changes within one second, so a change point must keep its
+    milliseconds to select the state right after it.
+    """
+    if moment.microsecond:
+        return moment.isoformat(timespec="milliseconds")
+    if moment.second:
+        return moment.isoformat(timespec="seconds")
+    return moment.isoformat(timespec="minutes")
+
+
+def point_in_time_step(moment: datetime | None) -> str:
+    """``step`` attribute of the ``datetime-local`` input showing ``moment`` (seconds; ``"60"`` is the default)."""
+    if moment is not None and moment.microsecond:
+        return "0.001"
+    if moment is not None and moment.second:
+        return "1"
+    return "60"
+
+
+def format_moment(moment: datetime) -> str:
+    """``2026-01-15 09:30 UTC``, with seconds and milliseconds only when they are not zero."""
+    text = point_in_time_value(moment).replace("T", " ")
+    return f"{text} UTC"
+
+
+def _ceil_to_millisecond(moment: datetime) -> datetime:
+    """``moment`` rounded up to a whole millisecond (so the state *at* it includes what happened then)."""
+    remainder = moment.microsecond % 1000
+    return moment + timedelta(microseconds=1000 - remainder) if remainder else moment
 
 
 def _sort_alerts(alerts: Iterable[Alert]) -> list[Alert]:
@@ -181,6 +214,10 @@ class PatientListRow:
     def alert_total(self) -> int:
         return sum(self.alert_counts.values())
 
+    @property
+    def age(self) -> str:
+        return age_text(self.patient.birth_date)
+
 
 def patient_list_rows(patients: Sequence[Patient], *, include_alerts: bool) -> list[PatientListRow]:
     """Aggregates for one page of patients: three grouped queries regardless of the page size.
@@ -190,16 +227,15 @@ def patient_list_rows(patients: Sequence[Patient], *, include_alerts: bool) -> l
     ids = [patient.id for patient in patients]
     if not ids:
         return []
-    actionable: dict[int, int] = dict(
-        db.session.execute(
-            select(PatientVariant.patient_id, func.count(PatientVariant.id))
-            .where(
-                PatientVariant.patient_id.in_(ids),
-                PatientVariant.current_classification.in_(sorted(C.ACTIONABLE)),
-            )
-            .group_by(PatientVariant.patient_id)
-        ).tuples()
+    actionable_rows = db.session.execute(
+        select(PatientVariant.patient_id, func.count(PatientVariant.id))
+        .where(
+            PatientVariant.patient_id.in_(ids),
+            PatientVariant.current_classification.in_(sorted(C.ACTIONABLE)),
+        )
+        .group_by(PatientVariant.patient_id)
     )
+    actionable = {patient_id: count for patient_id, count in actionable_rows}
     alert_counts: dict[int, dict[str, int]] = defaultdict(dict)
     if include_alerts:
         rows = db.session.execute(
@@ -210,7 +246,7 @@ def patient_list_rows(patients: Sequence[Patient], *, include_alerts: bool) -> l
                 Alert.kind == "alert",
             )
             .group_by(Alert.patient_id, Alert.severity)
-        ).tuples()
+        )
         for patient_id, severity, count in rows:
             alert_counts[patient_id][severity] = count
     latest_ids = (
@@ -350,7 +386,7 @@ def genomic_profile(patient: Patient) -> GenomicProfile:
         statement = select(
             KnownVariant.release_id, KnownVariant.variant_key_id, KnownVariant.classification, KnownVariant.hgvs
         ).where(KnownVariant.variant_key_id.in_(chunk), KnownVariant.release_id.in_(release_ids))
-        for release_id, key_id, cls, hgvs in db.session.execute(statement).tuples():
+        for release_id, key_id, cls, hgvs in db.session.execute(statement):
             records[(release_id, key_id)] = (cls, hgvs)
 
     def hgvs_for(key_id: int) -> str | None:
@@ -448,6 +484,20 @@ class ChangePoint:
     created: int
     superseded: int
 
+    @property
+    def moment(self) -> datetime:
+        """The change time rounded up to the millisecond: the state at it includes the change."""
+        return _ceil_to_millisecond(self.at)
+
+    @property
+    def value(self) -> str:
+        """``?at=`` value selecting the state right after the change."""
+        return point_in_time_value(self.moment)
+
+    @property
+    def display(self) -> str:
+        return format_moment(self.moment)
+
 
 @dataclass
 class RecommendationsView:
@@ -464,6 +514,21 @@ class RecommendationsView:
     @property
     def alert_count(self) -> int:
         return sum(len(findings) for _severity, findings in self.groups)
+
+    @property
+    def at_display(self) -> str:
+        """The viewed point in time for display (empty for the current state)."""
+        return format_moment(self.at) if self.at is not None else ""
+
+    @property
+    def at_value(self) -> str:
+        """Value of the point-in-time input (empty for the current state)."""
+        return point_in_time_value(self.at) if self.at is not None else ""
+
+    @property
+    def at_step(self) -> str:
+        """``step`` of the point-in-time input, fine enough for :attr:`at_value`."""
+        return point_in_time_step(self.at)
 
     @property
     def counts(self) -> dict[str, int]:
@@ -511,6 +576,7 @@ def _patient_alerts(patient: Patient) -> list[Alert]:
             joinedload(Alert.created_run),
             joinedload(Alert.superseded_run),
             joinedload(Alert.reviewed_by),
+            joinedload(Alert.review_notice),
             selectinload(Alert.events).options(
                 joinedload(AlertEvent.release),
                 joinedload(AlertEvent.rule_version),

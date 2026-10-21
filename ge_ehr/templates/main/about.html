@@ -1,0 +1,180 @@
+{#- About GE-EHR: purpose, modules F1–F5, change-driven re-evaluation, genes, rules, disclaimer, limitations, references. -#}
+{% extends "base.html" %}
+{% import "_macros.html" as ui %}
+{% import "knowledge/_kb_macros.html" as kb %}
+{% block title %}About GE-EHR{% endblock %}
+{% block content %}
+<section class="about-hero" aria-labelledby="about-title">
+  <p class="about-eyebrow">Research prototype</p>
+  <h1 class="about-title" id="about-title">GE-EHR for monogenic diabetes</h1>
+  <p class="about-lead">A Genomic-Enhanced EHR with reclassification-aware re-evaluation. It stores VCF-derived variants in seven
+    monogenic diabetes genes, classifies them against a versioned ClinVar knowledge base, applies six medication-aware rules and
+    re-evaluates stored patients whenever ClinVar or the rules change.</p>
+  <div class="about-facts" role="list">
+    <div role="listitem"><span class="about-fact-value">1–2%</span><span class="about-fact-label">of diabetes is monogenic</span></div>
+    <div role="listitem"><span class="about-fact-value">≈80%</span><span class="about-fact-label">of cases are misdiagnosed as type 1 or type 2</span></div>
+    <div role="listitem"><span class="about-fact-value">50%</span><span class="about-fact-label">risk for each first-degree relative (autosomal dominant)</span></div>
+  </div>
+</section>
+
+<section class="about-disclaimer" aria-labelledby="disclaimer-title">
+  <h2 class="about-disclaimer-title" id="disclaimer-title"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> Disclaimer</h2>
+  <ul>
+    <li><strong>Synthetic data only.</strong> Every patient, VCF and demo knowledge-base release is synthetic; demo releases are ClinVar-format files that are not real ClinVar data. Do not enter real patient information.</li>
+    <li><strong>Advisory — for specialist review.</strong> Recommendations are phrased for review by a diabetes specialist. GE-EHR never changes or reverses therapy itself.</li>
+    <li><strong>Not validated for clinical use.</strong> The rules are simplified summaries of published guidance whose treatment evidence is limited; they must be reviewed by diabetes specialists before any clinical use.</li>
+  </ul>
+</section>
+
+<section class="about-section" aria-labelledby="modules-title">
+  <h2 class="about-heading" id="modules-title">Five modules</h2>
+  <p class="about-text">F1–F3 run when a VCF is uploaded or a medication or diagnosis changes; F5 runs when a new ClinVar release or rule version is imported and re-runs F2/F3 for the affected patients only.</p>
+  <div class="module-grid">
+    {% set modules = [
+      ("F1", "Patient and genomic records", "people", "Patients, diabetes diagnosis and age at diagnosis, current diabetes medications and VCF upload (GRCh38, validated before parsing), in one patient view."),
+      ("F2", "Variant classification", "layers", "Variants in the seven genes are matched by exact key to the current ClinVar release and labelled with the ACMG/AMP class; expert-panel classifications take precedence. Unmatched variants are “not classified”, not VUS."),
+      ("F3", "Decision support", "journal-medical", "Six versioned, medication-aware rules compare the genetic diagnosis with the current therapy. A met condition raises an alert with severity, recommendation and source; otherwise an explanatory note."),
+      ("F4", "FHIR export", "box-arrow-up-right", "Patient and variant Observations as an HL7 FHIR R4 Bundle (Genomics Reporting profiles); reclassified variants are exported with status amended."),
+      ("F5", "Re-evaluation engine", "arrow-repeat", "Imports ClinVar releases and rule versions, detects changed classifications among stored variants, then re-alerts, supersedes or updates provenance — and logs every run."),
+    ] %}
+    {% for code, title, icon, text in modules %}
+    <article class="module-card{% if code == 'F5' %} module-card-key{% endif %}">
+      <div class="module-head"><span class="module-code">{{ code }}</span><i class="bi bi-{{ icon }}" aria-hidden="true"></i></div>
+      <h3 class="module-title">{{ title }}</h3>
+      <p class="module-text">{{ text }}</p>
+      {% if code == "F5" %}<span class="module-flag">Main contribution</span>{% endif %}
+    </article>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="about-section" aria-labelledby="reeval-title">
+  <h2 class="about-heading" id="reeval-title">Change-driven re-evaluation</h2>
+  <div class="row g-4">
+    <div class="col-lg-5">
+      <p class="about-text">Interpretations of variants in diabetes genes change as evidence accumulates: re-curation with the ClinGen gene-specific
+        guidelines upgraded half of the GCK VUS in one cohort to likely pathogenic. An EHR that evaluates variants only once never passes
+        such a change on, and a patient may stay on insulin when tablets would suffice.</p>
+      <p class="about-text">When a release is imported, GE-EHR compares it with the current release <strong>only for variant keys stored for some patient</strong>,
+        assigns each changed key a category and applies its action to every carrier — relatives sharing a variant are all re-evaluated.
+        Work scales with the changed variants and their carriers, not with the size of ClinVar. Rule revisions re-run the revised rule for the
+        carriers of its genes and notify only when the outcome changes.</p>
+    </div>
+    <div class="col-lg-7">
+      <div class="card card-table">
+        <div class="table-responsive">
+          <table class="table table-app align-middle mb-0">
+            <caption class="visually-hidden">Change categories and system actions (paper Table IV)</caption>
+            <thead><tr><th scope="col">Change</th><th scope="col">Example</th><th scope="col">Action</th></tr></thead>
+            <tbody>
+              <tr><td>{{ kb.category_badge("upgrade") }}</td><td class="text-nowrap">{{ ui.gene("HNF1A") }} VUS → LP</td><td>Run the rules; new alert marked reclassified, high priority, clinician notified.</td></tr>
+              <tr><td>{{ kb.category_badge("downgrade") }}</td><td class="text-nowrap">{{ ui.gene("GCK") }} LP → VUS</td><td>Supersede the alert and raise a review notice; FHIR status amended; therapy is never reversed automatically.</td></tr>
+              <tr><td>{{ kb.category_badge("within_actionable") }}</td><td class="text-nowrap">{{ ui.gene("HNF4A") }} LP → P</td><td>Update provenance; no notification.</td></tr>
+              <tr><td>{{ kb.category_badge("within_non_actionable") }}</td><td class="text-nowrap">{{ ui.gene("HNF1A") }} VUS → LB</td><td>Update provenance; no notification.</td></tr>
+              <tr><td><span class="badge badge-category badge-category-rule"><i class="bi bi-journal-medical" aria-hidden="true"></i>Rule revision</span></td><td>New guidance</td><td>Re-run the revised rule for carriers of its genes; notify only if the outcome changes.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="about-section" aria-labelledby="genes-title">
+  <h2 class="about-heading" id="genes-title">Seven genes</h2>
+  <div class="card card-table">
+    <div class="table-responsive">
+      <table class="table table-app align-middle mb-0">
+        <thead><tr><th scope="col">Gene</th><th scope="col" class="d-none d-md-table-cell">HGNC</th><th scope="col" class="d-none d-lg-table-cell">Panel region (GRCh38)</th><th scope="col" class="d-none d-sm-table-cell">Transcript</th><th scope="col">Why it matters</th></tr></thead>
+        <tbody>
+          {% set relevance = {
+            "GCK": "Mild, non-progressive fasting hyperglycaemia; medication usually not required outside pregnancy (D1).",
+            "HNF1A": "Sulfonylurea-sensitive diabetes; low-dose sulfonylurea as first-line treatment (D2).",
+            "HNF4A": "Sulfonylurea-sensitive; supporting evidence more limited than for HNF1A (D3).",
+            "HNF1B": "Monogenic diabetes; genetic counselling and cascade testing of relatives (D5).",
+            "KCNJ11": "Activating variants cause neonatal diabetes that responds to high-dose sulfonylurea (D4).",
+            "ABCC8": "Activating variants cause neonatal diabetes; covered by D4 from version 2.",
+            "INS": "Monogenic diabetes; genetic counselling and cascade testing of relatives (D5).",
+          } %}
+          {% for info in genes %}
+          <tr>
+            <th scope="row">{{ ui.gene(info.symbol) }}</th>
+            <td class="d-none d-md-table-cell font-monospace small">{{ info.hgnc_id }}</td>
+            <td class="d-none d-lg-table-cell font-monospace small text-nowrap">chr{{ info.chrom }}:{{ info.start|number }}–{{ info.end|number }}</td>
+            <td class="d-none d-sm-table-cell font-monospace small">{{ info.transcript }}</td>
+            <td class="small">{{ relevance.get(info.symbol, "") }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="about-section" aria-labelledby="rules-title">
+  <h2 class="about-heading" id="rules-title">Six rules</h2>
+  <p class="about-text">Each rule has the form <em>IF an actionable variant in gene G (AND therapy condition T) THEN alert with severity S,
+    recommendation R and source E</em>. When the genetic criterion is met but the therapy condition is not, an explanatory note is recorded instead.
+    {% if is_clinical %}The versions in use are on the <a href="{{ url_for('knowledge.rules') }}">decision rules</a> page.{% endif %}</p>
+  <div class="card card-table">
+    <div class="table-responsive">
+      <table class="table table-app align-middle mb-0 about-rules">
+        <caption class="visually-hidden">Decision-support rules as published in the design paper (Table III)</caption>
+        <thead><tr><th scope="col">Rule</th><th scope="col">Genetic condition</th><th scope="col" class="d-none d-md-table-cell">Therapy condition</th><th scope="col">Severity</th><th scope="col" class="d-none d-lg-table-cell">Recommendation</th><th scope="col" class="d-none d-xl-table-cell">Source</th></tr></thead>
+        <tbody>
+          {% set rules = [
+            ("D1", "GCK P/LP", "Any glucose-lowering drug", "medium", "Medication usually not required outside pregnancy; review whether it can be stopped.", "[1], [4]"),
+            ("D2", "HNF1A P/LP", "Insulin or metformin, no sulfonylurea", "high", "Consider low-dose sulfonylurea as first-line treatment.", "[1], [7]"),
+            ("D3", "HNF4A P/LP", "Insulin or metformin, no sulfonylurea", "medium", "Consider low-dose sulfonylurea (supporting evidence is more limited than for HNF1A).", "[1], [7]"),
+            ("D4", "KCNJ11 or ABCC8 activating P/LP", "Insulin; diabetes diagnosed in infancy", "high", "Refer to specialist to consider transfer to high-dose sulfonylurea.", "[1]"),
+            ("D5", "Any of the 7 genes P/LP", "—", "low", "Offer genetic counselling and cascade testing of first-degree relatives (50% inheritance).", "Autosomal dominant inheritance"),
+            ("D6", "GCK, HNF1A or HNF4A VUS", "—", "info", "No treatment change; flag as monitored for reclassification.", "[5], [8]"),
+          ] %}
+          {% for code, genetic, therapy, severity, recommendation, source in rules %}
+          <tr>
+            <th scope="row">{{ code }}</th>
+            <td>{{ genetic }}<div class="small text-body-secondary d-md-none">{{ therapy }}</div></td>
+            <td class="d-none d-md-table-cell">{{ therapy }}</td>
+            <td>{{ ui.severity_badge(severity) }}</td>
+            <td class="d-none d-lg-table-cell small">{{ recommendation }}</td>
+            <td class="d-none d-xl-table-cell small text-nowrap">{{ source }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<div class="row g-4 about-section">
+  <section class="col-lg-5" aria-labelledby="limits-title">
+    <h2 class="about-heading" id="limits-title">Limitations</h2>
+    <ul class="about-list">
+      <li>Synthetic patients only; clinical accuracy and clinician response are not evaluated.</li>
+      <li>ClinVar may contain conflicting submissions; GE-EHR prefers expert-panel classifications and prompts review rather than changing therapy.</li>
+      <li>Seven genes and six rules: rarer monogenic and syndromic forms are not covered, and treatment in pregnancy needs specialist guidance beyond these rules.</li>
+      <li>The treatment rules simplify published guidance; the underlying evidence is limited and at moderate or serious risk of bias, so rules must be reviewed by diabetes specialists before any clinical use.</li>
+      <li>Variants are matched exactly by chromosome, position and alleles (no left-normalisation); SQLite is not suited to heavy concurrent use.</li>
+    </ul>
+  </section>
+  <section class="col-lg-7" aria-labelledby="refs-title">
+    <h2 class="about-heading" id="refs-title">References</h2>
+    <ol class="reference-list">
+      <li>E. Kang, L. Y. Chung, Y. J. Kim, K. E. Oh, Y.-J. Rhie. “Monogenic diabetes mellitus and clinical implications of genetic diagnosis.” <em>Precision and Future Medicine</em> 5(3):106–116, 2021. doi:10.23838/pfm.2021.00100</li>
+      <li>I. Stankute et al. “Novel variants of monogenic diabetes and impact of genetic diagnosis on treatment strategies.” <em>Frontiers in Medicine</em> 12:1737184, 2026. doi:10.3389/fmed.2025.1737184</li>
+      <li>D. K. Tobias et al. “Second international consensus report on gaps and opportunities for the clinical translation of precision diabetes medicine.” <em>Nature Medicine</em> 29(10):2438–2457, 2023. doi:10.1038/s41591-023-02502-5</li>
+      <li>S. M. C. De Sousa, J. M. N. Phan, A. Wells, K. H. C. Wu, H. S. Scott. “Improving detection of monogenic diabetes through reanalysis of GCK variants of uncertain significance.” <em>Acta Diabetologica</em>, 2025. doi:10.1007/s00592-025-02449-8</li>
+      <li>ClinGen Monogenic Diabetes Variant Curation Expert Panel. “Specifications to the ACMG/AMP variant interpretation guidelines for GCK (v1.3.0), HNF1A and HNF4A (v2.0.0).” cspec.genome.network</li>
+      <li>P. Gupta et al. “Imprecision medicine: systematic gaps in reporting variants of uncertain significance (VUS) and their reclassifications.” <em>Genetics in Medicine</em> 27(9):101501, 2025. doi:10.1016/j.gim.2025.101501</li>
+      <li>R. N. Naylor, K. A. Patel, J. L. T. Kettunen et al. “Precision treatment of beta-cell monogenic diabetes: a systematic review.” <em>Communications Medicine</em> 4:145, 2024.</li>
+      <li>S. Richards, N. Aziz, S. Bale et al. “Standards and guidelines for the interpretation of sequence variants: a joint consensus recommendation of the ACMG and AMP.” <em>Genetics in Medicine</em> 17(5):405–424, 2015.</li>
+      <li>M. J. Landrum, S. Chitipiralla, K. Kaur et al. “ClinVar: updates to support classifications of both germline and somatic variants.” <em>Nucleic Acids Research</em> 53(D1):D1313, 2025. doi:10.1093/nar/gkae1090</li>
+      <li>S. J. Aronson, E. H. Clark, M. Varugheese, S. Baxter, L. J. Babb, H. L. Rehm. “Communicating new knowledge on previously reported genetic variants.” <em>Genetics in Medicine</em> 14(8):713–719, 2012. doi:10.1038/gim.2012.19</li>
+      <li>K. Yauy et al. “Genome Alert!: a standardized procedure for genomic variant reinterpretation and automated gene–phenotype reassessment in clinical routine.” <em>Genetics in Medicine</em> 24(6):1316–1327, 2022.</li>
+      <li>“Automated reanalysis of genomic data for rare disease diagnostics at scale.” <em>Nature Medicine</em>, 2026. doi:10.1038/s41591-026-04477-5</li>
+      <li>HL7 International, Clinical Genomics Work Group. “Genomics Reporting Implementation Guide, version 2.0.0.” hl7.org/fhir/uv/genomics-reporting</li>
+      <li>J. Walonoski, M. Kramer, J. Nichols et al. “Synthea: an approach, method, and software mechanism for generating synthetic patients and the synthetic electronic health care record.” <em>Journal of the American Medical Informatics Association</em> 25(3):230–238, 2018.</li>
+    </ol>
+  </section>
+</div>
+{% endblock %}

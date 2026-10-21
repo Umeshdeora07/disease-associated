@@ -14,6 +14,7 @@ end use the suite's per-test ``app`` database.
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Iterator
 from datetime import timedelta
@@ -52,7 +53,8 @@ from ge_ehr.models import (
 from ge_ehr.services.alerting import import_rule_versions
 from ge_ehr.services.fhir_export import build_patient_bundle, validate_bundle
 from ge_ehr.services.reevaluation import alerts_as_of, provenance_as_of
-from ge_ehr.services.rules import load_rule_set_file
+from ge_ehr.services.rules import RuleDefinitionError, load_rule_set_file
+from ge_ehr.services.vcf_parser import VcfError
 from tests.conftest import build_app
 from tests.factories import TEST_PASSWORD, make_patient, make_user
 
@@ -821,6 +823,7 @@ def test_seed_demo_keeps_an_existing_demo_account(app: Flask) -> None:
 def test_seed_demo_rejects_invalid_options_before_changing_anything(
     app: Flask, options: dict[str, Any], message: str
 ) -> None:
+    """A weak password or an unknown rule set is refused before reset could drop any data."""
     make_patient(mrn="KEEP-1")
     _db.session.commit()
     with pytest.raises(DemoSeedError) as excinfo:
@@ -887,6 +890,7 @@ def test_seed_demo_with_another_app_creates_tables_and_commits() -> None:
 
 
 def test_demo_password_defaults_to_the_app_config(app: Flask) -> None:
+    """The --password value wins over DEMO_PASSWORD; both must meet the password policy."""
     assert demo_password() == DEFAULT_DEMO_PASSWORD
     app.config["DEMO_PASSWORD"] = "Configured-Pass-1"
     assert demo_password() == "Configured-Pass-1"
@@ -895,7 +899,15 @@ def test_demo_password_defaults_to_the_app_config(app: Flask) -> None:
         demo_password("no digits in here")
 
 
+def _demo_patients_file(tmp_path: Path, **changes: Any) -> Path:
+    """A patients.json holding only the first demo patient (DEMO-0001) with ``changes`` applied."""
+    path = tmp_path / "patients.json"
+    path.write_text(json.dumps([{**load_demo_patients()[0], **changes}]), encoding="utf-8")
+    return path
+
+
 def test_load_demo_patients_reads_the_fifteen_patients() -> None:
+    """The shipped patients.json holds DEMO-0001 … DEMO-0015 in order."""
     records = load_demo_patients()
     assert [record["mrn"] for record in records] == sorted(EXPECTED_R1)
 
@@ -910,11 +922,115 @@ def test_load_demo_patients_reads_the_fifteen_patients() -> None:
     ],
 )
 def test_load_demo_patients_reports_a_bad_file(tmp_path: Path, content: str | None, message: str) -> None:
+    """A missing file, invalid JSON or anything but a list of objects is refused with a clear message."""
     path = tmp_path / "patients.json"
     if content is not None:
         path.write_text(content, encoding="utf-8")
     with pytest.raises(DemoSeedError, match=re.escape(message)):
         load_demo_patients(path)
+
+
+@pytest.mark.parametrize(
+    ("changes", "problem"),
+    [
+        ({"sex": None, "vcf": "  "}, "(DEMO-0001): missing or empty field(s) sex, vcf."),
+        ({"mrn": ""}, "(no MRN): missing or empty field(s) mrn."),
+        ({"vcf": "../patients.json"}, "(DEMO-0001): 'vcf' must be a file name in "),
+        ({"diagnosis": "type1"}, "(DEMO-0001): 'diagnosis' must be an object with a 'diabetes_type'."),
+        ({"diagnosis": {"age_at_diagnosis_months": 180}}, "'diagnosis' must be an object with a 'diabetes_type'."),
+        (
+            {"medications": [{"drug_name": "Metformin"}]},
+            "(DEMO-0001): 'medications' must be a list of objects with a 'drug_name' and a 'drug_class'.",
+        ),
+        ({"medications": "insulin"}, "'medications' must be a list of objects"),
+    ],
+)
+def test_load_demo_patients_checks_the_structure_of_each_record(
+    tmp_path: Path, changes: dict[str, Any], problem: str
+) -> None:
+    """A record seed_demo could not read is reported with its position and MRN before anything changes."""
+    path = _demo_patients_file(tmp_path, **changes)
+    with pytest.raises(DemoSeedError) as excinfo:
+        load_demo_patients(path)
+    assert str(excinfo.value).startswith(f"{path}: patient #1 (")
+    assert problem in str(excinfo.value)
+
+
+def test_load_demo_patients_reports_every_problem_of_a_record(tmp_path: Path) -> None:
+    """All structural problems of the first bad record are listed together."""
+    path = _demo_patients_file(tmp_path, given_name=3, diagnosis=None, medications=[None])
+    with pytest.raises(DemoSeedError) as excinfo:
+        load_demo_patients(path)
+    assert str(excinfo.value) == (
+        f"{path}: patient #1 (DEMO-0001): missing or empty field(s) given_name; 'diagnosis' must be an object "
+        "with a 'diabetes_type'; 'medications' must be a list of objects with a 'drug_name' and a 'drug_class'."
+    )
+
+
+@pytest.mark.parametrize(
+    ("changes", "cause", "message"),
+    [
+        ({"sex": "robot"}, ValueError, "Sex must be one of: "),
+        ({"birth_date": "12/05/1994"}, ValueError, "Birth date must be a date in YYYY-MM-DD format, got '12/05/1994'."),
+        (
+            {"medications": [{"drug_name": "Metformin", "drug_class": "biguanide"}]},
+            ValueError,
+            "Drug class must be one of: ",
+        ),
+        ({"vcf": "malformed.vcf"}, VcfError, "POS must be a positive whole number"),
+    ],
+)
+def test_seed_demo_names_the_demo_patient_a_service_rejects(
+    app: Flask,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    changes: dict[str, Any],
+    cause: type[Exception],
+    message: str,
+) -> None:
+    """patient_records validates the values and the VCF; the error names the patient and a rollback keeps nothing."""
+    monkeypatch.setattr(demo, "DEMO_PATIENTS_FILE", _demo_patients_file(tmp_path, **changes))
+    with pytest.raises(DemoSeedError) as excinfo:
+        seed_demo()
+    assert str(excinfo.value).startswith("Demo patient DEMO-0001 could not be loaded: ")
+    assert message in str(excinfo.value)
+    assert isinstance(excinfo.value.__cause__, cause)
+    _db.session.rollback()
+    assert (_count(Patient), _count(GenomicUpload), _count(User), _count(RuleVersion)) == (0, 0, 0, 0)
+
+
+def test_seed_demo_reports_an_invalid_rule_set_before_reset(
+    app: Flask, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A demo rule set that does not validate is reported before reset could drop any data."""
+    make_patient(mrn="KEEP-1")
+    _db.session.commit()
+    path = tmp_path / "ruleset_v1.json"
+    path.write_text('{"rule_set": "Broken", "label": "v1", "rules": [{"code": "D1"}]}', encoding="utf-8")
+    monkeypatch.setitem(demo.DEMO_RULE_SETS, "v1", path)
+    with pytest.raises(DemoSeedError) as excinfo:
+        seed_demo(reset=True)
+    assert str(excinfo.value).startswith(f"Demo rule set {path} cannot be loaded: ")
+    assert isinstance(excinfo.value.__cause__, RuleDefinitionError)
+    _db.session.rollback()
+    assert [item.mrn for item in _db.session.scalars(select(Patient))] == ["KEEP-1"]
+
+
+def test_seed_demo_reports_a_demo_release_the_importer_refuses(
+    app: Flask, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A release file import_release refuses is named in the error; a rollback keeps nothing."""
+    path = tmp_path / "not_clinvar.vcf"
+    path.write_text("hello\n", encoding="utf-8")
+    monkeypatch.setattr(demo, "DEMO_RELEASE_1_FILE", path)
+    with pytest.raises(DemoSeedError) as excinfo:
+        seed_demo()
+    assert str(excinfo.value) == (
+        f"Demo release {path} could not be imported: not_clinvar.vcf is not a VCF file: its first line must be "
+        "'##fileformat=VCFv4.x'."
+    )
+    _db.session.rollback()
+    assert (_count(KbRelease), _count(RuleVersion), _count(User)) == (0, 0, 0)
 
 
 # ---------------------------------------------------------------------------
@@ -923,6 +1039,7 @@ def test_load_demo_patients_reports_a_bad_file(tmp_path: Path, content: str | No
 
 
 def test_cli_seed_demo_prints_logins_and_next_steps(runner: FlaskCliRunner, db: SQLAlchemy) -> None:
+    """``flask seed-demo`` commits the R1 state, prints the summary, the logins and the live-demo steps."""
     result = runner.invoke(args=["seed-demo"])
     assert result.exit_code == 0, result.output
     output = result.output
@@ -939,6 +1056,7 @@ def test_cli_seed_demo_prints_logins_and_next_steps(runner: FlaskCliRunner, db: 
         "Knowledge base → Releases → import data/demo/clinvar/demo_release_2.vcf.gz with 'activate and re-evaluate'"
         in output
     )
+    assert f"Label it '{R2_LABEL}'." in output
     db.session.rollback()  # the command committed: the data survives a rollback
     assert _count(Patient) == 15
 
@@ -948,6 +1066,7 @@ def test_cli_seed_demo_prints_logins_and_next_steps(runner: FlaskCliRunner, db: 
 
 
 def test_cli_reset_asks_for_confirmation(runner: FlaskCliRunner, db: SQLAlchemy) -> None:
+    """``--reset`` drops nothing unless confirmed (or ``--yes``); ``--full`` then reaches the R2 state."""
     make_patient(mrn="KEEP-1")
     db.session.commit()
     declined = runner.invoke(args=["seed-demo", "--reset"], input="n\n")
@@ -972,6 +1091,7 @@ def test_cli_reset_asks_for_confirmation(runner: FlaskCliRunner, db: SQLAlchemy)
 
 
 def test_cli_hides_a_configured_demo_password(app: Flask, runner: FlaskCliRunner) -> None:
+    """Only the public default password is printed; a configured DEMO_PASSWORD is not."""
     app.config["DEMO_PASSWORD"] = "Configured-Secret-77"
     result = runner.invoke(args=["seed-demo"])
     assert result.exit_code == 0, result.output
@@ -980,8 +1100,21 @@ def test_cli_hides_a_configured_demo_password(app: Flask, runner: FlaskCliRunner
 
 
 def test_cli_rejects_a_weak_password_before_touching_the_database(runner: FlaskCliRunner, db: SQLAlchemy) -> None:
+    """A weak ``--password`` is a usage error (exit 2), reported before the reset confirmation."""
     result = runner.invoke(args=["seed-demo", "--reset", "--password", "weak"])
     assert result.exit_code == 2
     assert "Invalid value for '--password': The demo password does not meet the password policy" in result.output
     assert "Drop ALL tables" not in result.output
     assert _count(User) == 0
+
+
+def test_cli_reports_a_demo_data_error_and_commits_nothing(
+    runner: FlaskCliRunner, db: SQLAlchemy, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A demo record the services reject ends the command with a clear error (exit 1), not a traceback."""
+    monkeypatch.setattr(demo, "DEMO_PATIENTS_FILE", _demo_patients_file(tmp_path, sex="robot"))
+    result = runner.invoke(args=["seed-demo"])
+    assert result.exit_code == 1
+    assert result.output.startswith("Error: Demo patient DEMO-0001 could not be loaded: Sex must be one of: ")
+    assert "Traceback" not in result.output and "Demo logins" not in result.output
+    assert (_count(Patient), _count(User), _count(RuleVersion), _count(KbRelease)) == (0, 0, 0, 0)

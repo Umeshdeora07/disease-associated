@@ -1,0 +1,85 @@
+{#- Patient VCF upload. A rejected file (VcfError) is shown with its line number (HTTP 400, S10). -#}
+{% extends "base.html" %}
+{% import "_macros.html" as ui %}
+{% import "patients/_patient_macros.html" as pm %}
+{% block title %}Upload VCF · {{ patient.display_name }}{% endblock %}
+{% block content %}
+{{ pm.breadcrumb([("Patients", url_for("patients.list_patients")),
+                  (patient.display_name, url_for("patients.view_patient", patient_id=patient.id)),
+                  ("Upload VCF", none)]) }}
+{{ ui.page_header("Upload VCF", "Add genomic data for " ~ patient.display_name ~ " (" ~ patient.mrn ~ "). Panel variants are classified against the current release and decision support is re-run.", icon="upload") }}
+
+<div class="row g-4">
+  <div class="col-lg-7">
+    {% if error %}
+    <div class="alert alert-danger vcf-error" role="alert" id="vcf-error">
+      <i class="bi bi-file-earmark-x" aria-hidden="true"></i>
+      <div class="alert-body">
+        <p class="vcf-error-title">The file was rejected.</p>
+        <p class="vcf-error-message">{% if error.line is not none %}<span class="line-tag">Line {{ error.line }}</span>{% endif %}{{ error.message }}</p>
+        <p class="vcf-error-hint mb-0">No variants were stored. The rejection is kept in the upload history for audit. Correct the file and upload it again.</p>
+      </div>
+    </div>
+    {% endif %}
+    <form class="card" method="post" enctype="multipart/form-data" novalidate aria-label="Upload patient VCF">
+      <div class="card-body">
+        {{ form.hidden_tag() }}
+        {{ ui.render_form_errors(form) }}
+        <div class="vcf-dropzone{% if form.vcf_file.errors or error %} vcf-dropzone-invalid{% endif %}">
+          <div class="vcf-dropzone-icon" aria-hidden="true"><i class="bi bi-file-earmark-arrow-up"></i></div>
+          {{ ui.render_field(form.vcf_file, wrapper_class="vcf-dropzone-field",
+                             help="Plain .vcf or gzip/bgzip-compressed .vcf.gz, at most " ~ max_bytes|filesize ~ ".",
+                             data_max_bytes=max_bytes) }}
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary"><i class="bi bi-upload" aria-hidden="true"></i> Upload and evaluate</button>
+          <a class="btn btn-outline-secondary" href="{{ url_for('patients.view_patient', patient_id=patient.id) }}">Cancel</a>
+        </div>
+      </div>
+    </form>
+
+    <section class="card card-table block-gap" aria-labelledby="recent-uploads-title">
+      <div class="card-header">
+        <h2 class="card-title-text" id="recent-uploads-title"><i class="bi bi-clock-history" aria-hidden="true"></i> Recent uploads</h2>
+        {% if uploads %}<a class="btn btn-sm btn-outline-secondary" href="{{ url_for('patients.view_patient', patient_id=patient.id, _anchor='uploads') }}">All uploads</a>{% endif %}
+      </div>
+      {% if uploads %}
+      {% set compact = true %}{% include "patients/_uploads_table.html" %}
+      {% else %}
+      <div class="card-body"><p class="muted-empty"><i class="bi bi-file-earmark" aria-hidden="true"></i> This is the first upload for this patient.</p></div>
+      {% endif %}
+    </section>
+  </div>
+
+  <div class="col-lg-5">
+    <aside class="card side-help" aria-labelledby="requirements-title">
+      <div class="card-body">
+        <h2 class="side-help-title" id="requirements-title"><i class="bi bi-list-check" aria-hidden="true"></i> File requirements</h2>
+        <ul class="req-list">
+          <li><strong>VCF 4.2</strong> (4.1 and 4.3 are accepted) with a <code>#CHROM</code> header line.</li>
+          <li><strong>GRCh38</strong> coordinates. Files declaring GRCh37/hg19 are rejected.</li>
+          <li><strong>One sample</strong> with a <code>GT</code> genotype; only the first sample column is read.</li>
+          <li>Records with FILTER <code>PASS</code> or <code>.</code> are kept; reference calls (0/0) are skipped.</li>
+          <li>Only the <strong>seven panel genes</strong> below are stored; other records are counted as off-panel.</li>
+        </ul>
+        <h3 class="side-help-subtitle">Gene panel (GRCh38)</h3>
+        <div class="table-responsive">
+          <table class="table table-sm panel-table mb-0">
+            <thead><tr><th scope="col">Gene</th><th scope="col">Region</th><th scope="col" class="d-none d-sm-table-cell">Transcript</th></tr></thead>
+            <tbody>
+              {% for gene in genes %}
+              <tr>
+                <td><span class="gene-symbol">{{ gene.symbol }}</span></td>
+                <td class="font-monospace small text-nowrap">chr{{ gene.chrom }}:{{ gene.start|number }}–{{ gene.end|number }}</td>
+                <td class="d-none d-sm-table-cell font-monospace small">{{ gene.transcript }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <p class="side-help-footnote"><i class="bi bi-shield-check" aria-hidden="true"></i> Uploads are processed in memory and never served back. Use synthetic files only.</p>
+      </div>
+    </aside>
+  </div>
+</div>
+{% endblock %}

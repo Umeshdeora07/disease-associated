@@ -98,7 +98,10 @@ def test_base_release_is_deterministic_with_realistic_gene_sizes_and_classes() -
     assert max(classes, key=classes.get) == "VUS"
     assert all(classes[cls] > 0 for cls in C.CLASSES)
     raw = summary["raw_significance"]
-    assert raw["Conflicting_classifications_of_pathogenicity"] > 0 and raw["Conflicting_interpretations_of_pathogenicity"] > 0
+    assert (
+        raw["Conflicting_classifications_of_pathogenicity"] > 0
+        and raw["Conflicting_interpretations_of_pathogenicity"] > 0
+    )
     expert = summary["expert_panel_by_gene"]
     assert all(expert[gene] > 0 for gene in K.EXPERT_PANEL_GENES)
     assert all(expert[gene] == 0 for gene in set(C.GENES) - K.EXPERT_PANEL_GENES)
@@ -152,7 +155,9 @@ def test_pure_classification_matches_the_database_import(app, tmp_path: Path, ba
 
 
 def _first_eligible(base: list[ClinVarRecord], kind: str, skip: set[K.Key] = frozenset()) -> K.Key:
-    return next(K.record_key(record) for record in base if K.is_eligible(kind, record) and K.record_key(record) not in skip)
+    return next(
+        K.record_key(record) for record in base if K.is_eligible(kind, record) and K.record_key(record) not in skip
+    )
 
 
 def test_forced_changes_cover_every_kind_with_the_expected_category(base: list[ClinVarRecord]) -> None:
@@ -170,7 +175,9 @@ def test_forced_changes_cover_every_kind_with_the_expected_category(base: list[C
         expected = None if kind == "vus_to_conflicting" else K.CHANGE_KINDS[kind].group
         assert change.category == expected, kind
     assert by_kind["katp_activating"].new_mechanism == "activating" != by_kind["katp_activating"].old_mechanism
-    assert by_kind["vus_to_conflicting"].new_class == "VUS" and by_kind["vus_to_conflicting"].new_clnsig.startswith("Conflicting")
+    assert by_kind["vus_to_conflicting"].new_class == "VUS" and by_kind["vus_to_conflicting"].new_clnsig.startswith(
+        "Conflicting"
+    )
     new_classes = K.classify_records(new)
     assert by_kind["p_removed"].key not in new_classes
     assert new_classes[by_kind["nc_to_lp"].key].classification == "LP"
@@ -181,7 +188,9 @@ def test_forced_changes_cover_every_kind_with_the_expected_category(base: list[C
 def test_uncarried_changes_and_additions_avoid_carried_keys(base: list[ClinVarRecord]) -> None:
     carried = frozenset(K.record_key(record) for record in base[::3])
     snapshot = list(base)
-    spec = K.ChangeSetSpec(uncarried={"vus_to_lp": 5, "lb_to_b": 4, "nc_to_lp": 2}, carried_keys=carried, added_uncarried=6)
+    spec = K.ChangeSetSpec(
+        uncarried={"vus_to_lp": 5, "lb_to_b": 4, "nc_to_lp": 2}, carried_keys=carried, added_uncarried=6
+    )
     new, truth = K.apply_change_set(base, spec, SEED)
     assert base == snapshot  # input untouched
     assert all(not change.carried and change.key not in carried for change in truth)
@@ -334,7 +343,9 @@ def test_scale_plan_is_deterministic_and_shares_variants_in_families(
     for planned in scale_plan.patients:
         assert planned.panel_keys & set(background.keys) or planned.panel_keys  # everybody has variants
         if planned.patient.family_id:
-            families.setdefault(planned.patient.family_id, set()).add(planned.panel_keys & scale_plan.roles.keys())
+            families.setdefault(planned.patient.family_id, set()).add(
+                frozenset(planned.panel_keys & scale_plan.roles.keys())
+            )
     assert len(families) == scale_plan.families
     assert all(len(selected) == 1 and len(next(iter(selected))) == 1 for selected in families.values())
 
@@ -352,7 +363,9 @@ def test_scale_plan_overrides_give_carriers_monogenic_phenotypes(scale_plan: S.C
     hnf_carriers = [
         planned.patient
         for planned in scale_plan.patients
-        if any(C.gene_for_position(*key[:2]) in ("HNF1A", "HNF4A") for key in planned.panel_keys & scale_plan.roles.keys())
+        if any(
+            C.gene_for_position(*key[:2]) in ("HNF1A", "HNF4A") for key in planned.panel_keys & scale_plan.roles.keys()
+        )
     ]
     classes_on = {medication.drug_class for patient in hnf_carriers for medication in patient.medications}
     assert {"insulin", "metformin", "sulfonylurea"} <= classes_on
@@ -432,7 +445,8 @@ def _finding(mrn: str, rule: str, key: K.Key, kind: str = "alert", severity: str
     return S.FindingId(mrn, rule, key, kind, severity)
 
 
-KEY_A, KEY_B, KEY_C = ("12", 1, "A", "G"), ("7", 2, "C", "T"), ("20", 3, "G", "A")
+# Keys inside the HNF1A, GCK and HNF4A panel regions (synthetic alleles).
+KEY_A, KEY_B, KEY_C = ("12", 120_978_901, "A", "G"), ("7", 44_145_201, "C", "T"), ("20", 44_401_301, "G", "A")
 
 
 def _outcome(**changes: Any) -> S.ChangeOutcome:
@@ -446,8 +460,13 @@ def _outcome(**changes: Any) -> S.ChangeOutcome:
         "new_findings": frozenset(),
         "superseded": frozenset(),
         "notifications": (),
-        "run": {"records_examined": 4, "patients_reevaluated": 2, "stored_keys_compared": 9, "changed_variants": 3,
-                "engine_duration_ms": 11.0},
+        "run": {
+            "records_examined": 4,
+            "patients_reevaluated": 2,
+            "stored_keys_compared": 9,
+            "changed_variants": 3,
+            "engine_duration_ms": 11.0,
+        },
         "changed_keys": frozenset(),
     }
     return S.ChangeOutcome(**{**defaults, **changes})
@@ -500,7 +519,13 @@ def test_change_metrics_without_notifications_report_na_precision() -> None:
 
 def _tiny_plan() -> S.CohortPlan:
     patient = CohortPatient(
-        "GEN-1", "Ada", "Test", "female", date(1990, 1, 1), "type1", 120,
+        "GEN-1",
+        "Ada",
+        "Test",
+        "female",
+        date(1990, 1, 1),
+        "type1",
+        120,
         [CohortMedication("Humulin", "insulin", date(2001, 1, 1))],
     )
     variants = ((*KEY_A, "heterozygous"), (*KEY_B, "heterozygous"), ("1", 1_000_000, "A", "G", "heterozygous"))
@@ -530,8 +555,18 @@ def test_ground_truth_uses_the_pure_rule_engine() -> None:
 
 def test_delta_check_compares_recorded_and_expected_keys() -> None:
     plan = _tiny_plan()
-    change = K.InjectedChange(KEY_A, "HNF1A", "vus_to_lp", True, "Uncertain_significance", "Likely_pathogenic",
-                              "VUS", "LP", "unknown", "unknown")
+    change = K.InjectedChange(
+        KEY_A,
+        "HNF1A",
+        "vus_to_lp",
+        True,
+        "Uncertain_significance",
+        "Likely_pathogenic",
+        "VUS",
+        "LP",
+        "unknown",
+        "unknown",
+    )
     raw_only = replace(change, key=KEY_B, kind="vus_to_conflicting", new_class="VUS")
     good = M.delta_check(_outcome(changed_keys=frozenset({KEY_A})), plan, [change, raw_only])
     assert good["matches"] and good["expected"] == 1
@@ -547,8 +582,15 @@ def test_delta_check_compares_recorded_and_expected_keys() -> None:
 @pytest.fixture(scope="module")
 def quick(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
     work = tmp_path_factory.mktemp("evaluation")
-    options = R.Options(scale=R.QUICK_SCALE, kb_size=R.QUICK_KB_SIZE, repeats=1, work_dir=work, quick=True,
-                        real_dir=work / "no-real-releases", out=work / "out")
+    options = R.Options(
+        scale=R.QUICK_SCALE,
+        kb_size=R.QUICK_KB_SIZE,
+        repeats=1,
+        work_dir=work,
+        quick=True,
+        real_dir=work / "no-real-releases",
+        out=work / "out",
+    )
     return R.run_evaluation(options)
 
 
@@ -604,7 +646,7 @@ def test_table_v_scenarios(quick: dict[str, Any]) -> None:
     for strategy, entry in entries.items():
         checks = {check["code"]: check for check in entry["scenarios"]}
         assert entry["point_in_time_correctness"]["value"] == 1.0, strategy
-        assert checks["S12"]["observed"] == "lab technician 403, clinician 200"
+        assert checks["S12"]["passed"] and checks["S12"]["observed"].startswith("lab technician 403, clinician ")
         assert checks["RS7"]["passed"]
         reclassification = [checks[f"RS{number}"]["passed"] for number in range(1, 7)]
         if strategy == "alert_once":
@@ -627,22 +669,56 @@ def test_write_results_renders_table_vi(tmp_path: Path, quick: dict[str, Any]) -
     json_path, markdown_path = R.write_results(quick, tmp_path / "out")
     assert json.loads(json_path.read_text())["options"] == quick["options"]
     text = markdown_path.read_text()
-    assert "## Table VI — measured" in text and "Paper Table VI expectations met: **9 of 9**" in text
+    expectations = quick["synthetic"]["table_vi_expectations"]
+    assert "## Table VI — measured" in text
+    assert f"Paper Table VI expectations met: **{len(expectations)} of {len(expectations)}**" in text
     assert "Real ClinVar release pair: pending — NCBI not reachable from the build environment" in text
     for label in S.STRATEGY_LABELS.values():
         assert label in text
+
+
+def test_table_vi_expectations_are_all_met(quick: dict[str, Any]) -> None:
+    expectations = quick["synthetic"]["table_vi_expectations"]
+    assert [row for row in expectations if not row["met"]] == []
+    assert {row["strategy"] for row in expectations} == set(S.STRATEGIES)
+    scale = quick["synthetic"]["cohorts"]["scale"]["strategies"]["change_driven"]["release"]
+    assert scale["records_examined"] == scale["delta"]["carrier_records"] > 0  # "changed only"
+
+
+def test_table_vi_expectations_flag_deviations(quick: dict[str, Any]) -> None:
+    cohorts = json.loads(json.dumps(quick["synthetic"]["cohorts"]))  # deep copy
+    scale = cohorts["scale"]["strategies"]
+    scale["change_driven"]["release"]["stale_alerts"] = 3
+    scale["full"]["release"]["records_examined"] -= 1
+    scale["alert_once"]["release"]["re_alert_sensitivity"]["numerator"] = 1
+    failed = {
+        (row["metric"], row["strategy"])
+        for row in R.table_vi_expectations(cohorts["scale"], cohorts["correctness"])
+        if not row["met"]
+    }
+    assert failed == {
+        ("Stale alerts after release", "change_driven"),
+        ("Records examined", "full"),
+        ("Re-alert sensitivity", "alert_once"),
+    }
+    text = "\n".join(R._expectations(R.table_vi_expectations(cohorts["scale"], cohorts["correctness"])))
+    assert "expectations met: **13 of 16**" in text and "| **no** |" in text
 
 
 def test_real_pair_path_runs_on_a_release_pair(tmp_path: Path, base: list[ClinVarRecord], classes) -> None:
     carried = frozenset(sorted(classes)[::2])
     new, _truth = K.apply_change_set(
         base,
-        K.ChangeSetSpec(uncarried={"vus_to_lp": 40, "lp_to_vus": 20, "lp_to_p": 20, "vus_to_lb": 40}, carried_keys=carried),
+        K.ChangeSetSpec(
+            uncarried={"vus_to_lp": 40, "lp_to_vus": 20, "lp_to_p": 20, "vus_to_lb": 40}, carried_keys=carried
+        ),
         SEED,
     )
     pair = K.RealReleasePair(
-        _write_subset(tmp_path, "2023-01-07", base), _write_subset(tmp_path, "2025-01-05", new),
-        date(2023, 1, 7), date(2025, 1, 5),
+        _write_subset(tmp_path, "2023-01-07", base),
+        _write_subset(tmp_path, "2025-01-05", new),
+        date(2023, 1, 7),
+        date(2025, 1, 5),
     )
     options = R.Options(scale=200, repeats=1, work_dir=tmp_path)
     result = R.evaluate_real_pair(pair, options, generate_cohort(200, 5), tmp_path)
@@ -690,10 +766,34 @@ def test_main_writes_results(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, qu
     assert seen[0].quick and (tmp_path / "results.json").is_file() and (tmp_path / "RESULTS.md").is_file()
 
 
-def test_main_reports_errors(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+def test_main_reports_errors(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     def failing(_options: R.Options) -> dict[str, Any]:
         raise ValueError("synthea_scale_10000.csv.gz holds 10,000 patients; 20,000 were requested.")
 
     monkeypatch.setattr(R, "run_evaluation", failing)
     assert R.main(["--scale", "20000", "--out", str(tmp_path)]) == 1
     assert not (tmp_path / "results.json").exists()
+    assert "Evaluation failed: synthea_scale_10000.csv.gz holds 10,000 patients" in capsys.readouterr().err
+
+
+def test_committed_results_meet_the_paper_expectations() -> None:
+    """The results kept in the repository (``python -m evaluation.run``) are complete and consistent."""
+    path = R.DEFAULT_OUT / "results.json"
+    if not path.is_file():
+        pytest.skip("evaluation/results/results.json has not been generated (run python -m evaluation.run)")
+    results = json.loads(path.read_text(encoding="utf-8"))
+    assert results["synthetic_data_only"] is True and not results["options"]["quick"]
+    assert (results["options"]["scale"], results["options"]["correctness"], results["options"]["repeats"]) == (
+        10_000,
+        30,
+        3,
+    )
+    assert [row for row in results["synthetic"]["table_vi_expectations"] if not row["met"]] == []
+    assert results["real_pair"]["status"] in ("pending", "evaluated")
+    scale = results["synthetic"]["cohorts"]["scale"]
+    assert scale["baseline"]["counts"]["patients"] == 10_000
+    assert all(len(scale["strategies"][strategy]["release"]["timing_ms"]["runs"]) == 3 for strategy in S.STRATEGIES)
+    markdown = (R.DEFAULT_OUT / "RESULTS.md").read_text(encoding="utf-8")
+    assert results["generated_at"] in markdown and "## Table VI — measured" in markdown

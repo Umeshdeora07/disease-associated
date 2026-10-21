@@ -1,0 +1,49 @@
+{#- One review notice. Expects ``notice``, ``form`` (acknowledge form or None) and ``show_patient``. -#}
+{% import "_macros.html" as ui %}
+{% set is_open = notice.status == "open" %}
+<article class="notice-card{% if is_open %} notice-card-open{% endif %}" aria-labelledby="notice-{{ notice.id }}-title">
+  <header class="notice-head">
+    <div class="notice-head-main">
+      <h3 class="notice-title" id="notice-{{ notice.id }}-title">
+        {% if show_patient %}<a href="{{ url_for('patients.recommendations', patient_id=notice.patient.id) }}">{{ notice.patient.display_name }}</a>
+        <span class="notice-mrn">{{ notice.patient.mrn }}</span>{% else %}Review notice{% endif %}
+      </h3>
+      <div class="notice-variant">
+        <span class="gene-symbol">{{ notice.variant_key.gene or "—" }}</span>
+        <code class="variant-key">{{ notice.variant_key.label }}</code>
+        <span class="class-change" aria-label="Classification changed from {{ notice.old_classification|class_label }} to {{ notice.new_classification|class_label }}">
+          {{ ui.class_badge(notice.old_classification) }}<i class="bi bi-arrow-right" aria-hidden="true"></i>{{ ui.class_badge(notice.new_classification) }}
+        </span>
+      </div>
+    </div>
+    <div class="notice-head-side">
+      {{ ui.status_badge(notice.status) }}
+      <div class="notice-when">Raised {{ notice.created_at|dt }}</div>
+    </div>
+  </header>
+  <p class="notice-message">{{ notice.message }}</p>
+  <div class="notice-links">
+    {% if notice.alerts %}
+    <span class="notice-links-label">Superseded:</span>
+    {% for alert in notice.alerts %}
+    <a class="rule-link" href="{{ url_for('alerts.view_alert', alert_id=alert.id) }}">{{ alert.rule_code }} {{ alert.kind }}<span class="visually-hidden">: {{ alert.title }}</span></a>
+    {% endfor %}
+    {% endif %}
+    {% if notice.run %}
+    <a class="notice-run" href="{{ url_for('knowledge.view_run', run_id=notice.run.id) }}"><i class="bi bi-arrow-repeat" aria-hidden="true"></i>Run #{{ notice.run.id }}{% if notice.run.new_release %} · {{ notice.run.new_release.label }}{% endif %}</a>
+    {% endif %}
+  </div>
+  {% if is_open and form %}
+  <form class="notice-ack" method="post" action="{{ url_for('alerts.acknowledge_notice', notice_id=notice.id) }}" novalidate aria-label="Acknowledge this review notice">
+    {{ form.hidden_tag() }}
+    {{ ui.render_field(form.comment, wrapper_class="notice-ack-comment") }}
+    <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-check2-square" aria-hidden="true"></i> Acknowledge</button>
+  </form>
+  {% elif not is_open %}
+  <div class="notice-acked">
+    <i class="bi bi-check2-circle" aria-hidden="true"></i>
+    <div>Acknowledged by <strong>{{ notice.acknowledged_by.full_name if notice.acknowledged_by else "an unknown user" }}</strong> on {{ notice.acknowledged_at|dt }}
+      {%- if notice.acknowledgement_comment %}<blockquote class="notice-comment">{{ notice.acknowledgement_comment }}</blockquote>{% endif %}</div>
+  </div>
+  {% endif %}
+</article>

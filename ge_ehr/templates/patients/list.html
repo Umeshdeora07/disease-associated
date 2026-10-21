@@ -1,0 +1,126 @@
+{#- Patient list: search, filters, per-row aggregates (alerts column for clinical roles only). -#}
+{% extends "base.html" %}
+{% import "_macros.html" as ui %}
+{% import "patients/_patient_macros.html" as pm %}
+{% block title %}Patients{% endblock %}
+{% block content %}
+{% set subtitle = "Synthetic patients with their diagnosis, genomic findings" ~ (" and current decision-support alerts." if show_alerts else ".") %}
+{% call ui.page_header("Patients", subtitle, icon="people") %}
+  {% if is_clinical %}
+  <a class="btn btn-primary" href="{{ url_for('patients.new_patient') }}"><i class="bi bi-person-plus" aria-hidden="true"></i> New patient</a>
+  {% endif %}
+{% endcall %}
+
+<form class="card filter-bar" method="get" action="{{ url_for('patients.list_patients') }}" role="search" aria-label="Search and filter patients">
+  <div class="card-body">
+    <div class="row g-2 align-items-end">
+      <div class="col-12 col-md-5 col-lg-4">
+        <label class="form-label" for="filter-q">Search</label>
+        <div class="input-group">
+          <span class="input-group-text" aria-hidden="true"><i class="bi bi-search"></i></span>
+          <input class="form-control" type="search" id="filter-q" name="q" value="{{ filters.q }}" maxlength="100"
+                 placeholder="Name or MRN" autocomplete="off" aria-describedby="filter-q-help">
+        </div>
+        <div class="visually-hidden" id="filter-q-help">Matches any part of the given name, family name or MRN.</div>
+      </div>
+      <div class="col-6 col-md-3 col-lg-2">
+        <label class="form-label" for="filter-type">Diabetes type</label>
+        <select class="form-select" id="filter-type" name="diabetes_type" data-autosubmit>
+          <option value="">All types</option>
+          {% for value in C.DIABETES_TYPES %}<option value="{{ value }}"{% if value == filters.diabetes_type %} selected{% endif %}>{{ value|diabetes_type_label }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="col-6 col-md-4 col-lg-2">
+        <label class="form-label" for="filter-family">Family ID</label>
+        <input class="form-control font-monospace" type="text" id="filter-family" name="family" value="{{ filters.family }}"
+               maxlength="64" placeholder="e.g. FAM-RS6" autocomplete="off" spellcheck="false">
+      </div>
+      {% if show_alerts %}
+      <div class="col-12 col-md-5 col-lg-2">
+        <div class="form-check filter-toggle">
+          <input class="form-check-input" type="checkbox" id="filter-alerts" name="alerts" value="1"{% if filters.with_alerts %} checked{% endif %} data-autosubmit>
+          <label class="form-check-label" for="filter-alerts">Has current alerts</label>
+        </div>
+      </div>
+      {% endif %}
+      <div class="col-12 col-md col-lg-2 d-flex gap-2 justify-content-lg-end">
+        <button type="submit" class="btn btn-primary"><i class="bi bi-funnel" aria-hidden="true"></i> Apply</button>
+        {% if filters.active %}<a class="btn btn-outline-secondary" href="{{ url_for('patients.list_patients') }}">Clear</a>{% endif %}
+      </div>
+    </div>
+  </div>
+</form>
+
+{% if filters.family %}
+<div class="filter-context" role="status">
+  <i class="bi bi-diagram-3" aria-hidden="true"></i>
+  <span>Family <strong class="font-monospace">{{ filters.family }}</strong>:
+    {{ family_size }} {{ "member" if family_size == 1 else "members" }} recorded. Relatives share variants, so cascade testing (rule D5) applies to each carrier.</span>
+</div>
+{% endif %}
+
+<div class="card card-table">
+  <div class="table-responsive">
+    <table class="table table-app table-hover align-middle patient-table">
+      <thead>
+        <tr>
+          <th scope="col" class="d-none d-sm-table-cell col-mrn">MRN</th>
+          <th scope="col">Name</th>
+          <th scope="col" class="d-none d-md-table-cell">Age / sex</th>
+          <th scope="col" class="d-none d-lg-table-cell">Diabetes type</th>
+          <th scope="col" class="text-center col-count"><span class="d-none d-md-inline">Actionable variants</span><span class="d-md-none" title="Actionable variants">P/LP</span></th>
+          {% if show_alerts %}<th scope="col">Current alerts</th>{% endif %}
+          <th scope="col" class="d-none d-md-table-cell">Last upload</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        {% set patient = row.patient %}
+        <tr>
+          <td class="d-none d-sm-table-cell"><a class="mrn-link" href="{{ url_for('patients.view_patient', patient_id=patient.id) }}">{{ patient.mrn }}</a></td>
+          <td>
+            <a class="row-link" href="{{ url_for('patients.view_patient', patient_id=patient.id) }}">{{ patient.display_name }}</a>
+            <div class="small text-body-secondary d-sm-none font-monospace">{{ patient.mrn }}</div>
+            <div class="small text-body-secondary d-md-none">{{ row.age }} · {{ patient.sex|sex_label }} · {{ (patient.diagnosis.diabetes_type if patient.diagnosis else "unknown")|diabetes_type_label }}</div>
+            {% if patient.family_id %}
+            <a class="family-chip" href="{{ url_for('patients.list_patients', family=patient.family_id) }}" title="Show the members of family {{ patient.family_id }}">
+              <i class="bi bi-diagram-3" aria-hidden="true"></i>{{ patient.family_id }}</a>
+            {% endif %}
+          </td>
+          <td class="d-none d-md-table-cell text-nowrap">{{ row.age }} · {{ patient.sex|sex_label }}</td>
+          <td class="d-none d-lg-table-cell">{{ pm.diabetes_type(patient.diagnosis) }}</td>
+          <td class="text-center">
+            {%- if row.actionable_variants %}<span class="count-pill count-pill-actionable" title="{{ row.actionable_variants }} pathogenic or likely pathogenic variant(s)">{{ row.actionable_variants }}</span>
+            {%- else %}<span class="count-pill count-pill-zero" title="No pathogenic or likely pathogenic variant">0</span>{% endif -%}
+          </td>
+          {% if show_alerts %}<td>{{ pm.severity_counts(row.alert_counts) }}</td>{% endif %}
+          <td class="d-none d-md-table-cell text-nowrap">
+            {%- if row.last_upload %}
+            <div>{{ row.last_upload.uploaded_at|date }}</div>
+            {%- if row.last_upload.status == "rejected" %}<div>{{ ui.status_badge("rejected") }}</div>{% endif %}
+            {%- else %}<span class="text-body-secondary">No VCF yet</span>{% endif -%}
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="{{ 7 if show_alerts else 6 }}">
+            {% if filters.active %}
+            {% call ui.empty_state("search", "No patients match these filters", "Try another name or MRN, or clear the filters to see every patient.") %}
+              <a class="btn btn-outline-secondary" href="{{ url_for('patients.list_patients') }}">Clear filters</a>
+            {% endcall %}
+            {% elif is_clinical %}
+            {% call ui.empty_state("people", "No patients yet", "Create a synthetic patient, then upload a VCF to add genomic data. Administrators can also load the demo dataset with “flask seed-demo”.") %}
+              <a class="btn btn-primary" href="{{ url_for('patients.new_patient') }}"><i class="bi bi-person-plus" aria-hidden="true"></i> New patient</a>
+            {% endcall %}
+            {% else %}
+            {{ ui.empty_state("people", "No patients yet", "Patients are created by clinicians. Once a patient exists you can upload their VCF here.") }}
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{ ui.pagination(pagination, "patients.list_patients", **filters.query_args()) }}
+{% endblock %}

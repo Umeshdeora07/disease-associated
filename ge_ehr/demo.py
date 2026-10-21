@@ -19,6 +19,7 @@ change-driven (reclassifications RS1–RS4, RS6; RS7). ``activate_r2=True`` does
 Seeding requires an empty database (no patients, knowledge-base releases or rule versions) so the
 scenario expectations hold; ``reset=True`` drops and recreates every table first. Demo accounts
 that already exist (e.g. an ``admin`` created with ``flask create-user``) are kept unchanged.
+Problems with the demo inputs are reported as :class:`DemoSeedError` naming the file or patient.
 Everything is synthetic; the demo files carry the synthetic markers of SPEC §0.
 
 Owned by the Scenario work package.
@@ -31,9 +32,8 @@ import logging
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeGuard
 
 from flask import Flask, current_app, has_app_context
 from sqlalchemy import func, select
@@ -54,7 +54,7 @@ from .models import (
 )
 from .security import audit, password_policy_problems
 from .services import alerting, clinvar, patient_records, reevaluation
-from .services.rules import RULES_DATA_DIR, load_rule_set_file, rule_code_sort_key
+from .services.rules import RULES_DATA_DIR, RuleDefinitionError, load_rule_set_file, rule_code_sort_key
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +73,9 @@ DEMO_RULE_SETS: dict[str, Path] = {
 }
 #: The rule set ``full=True`` applies through the re-evaluation engine (RS5).
 REVISED_RULE_SET = "v2"
+#: Text fields every patients.json record needs; their values are validated by patient_records.
+REQUIRED_PATIENT_FIELDS: tuple[str, ...] = ("mrn", "given_name", "family_name", "sex", "birth_date", "vcf")
+REQUIRED_MEDICATION_FIELDS: tuple[str, ...] = ("drug_name", "drug_class")
 
 
 @dataclass(frozen=True)
@@ -109,8 +112,14 @@ def demo_password(password: str | None = None) -> str:
 def load_demo_patients(path: Path = DEMO_PATIENTS_FILE) -> list[dict[str, Any]]:
     """The demo patient records of ``patients.json`` (a list of objects, SPEC §11).
 
-    Raises :class:`DemoSeedError` when the file is missing, is not valid JSON or does not hold a
-    list of patient objects.
+    Only the structure is checked here: every record needs the text fields of
+    :data:`REQUIRED_PATIENT_FIELDS` (``vcf`` is a file name in :data:`DEMO_VCF_DIR`), a
+    ``diagnosis`` object with a ``diabetes_type`` and, optionally, a ``medications`` list of
+    objects with ``drug_name`` and ``drug_class``. The values themselves are validated by
+    :mod:`~ge_ehr.services.patient_records` when the patients are created.
+
+    Raises :class:`DemoSeedError` when the file is missing, is not valid JSON or a record does
+    not have that structure.
     """
     try:
         records = json.loads(path.read_text(encoding="utf-8"))
@@ -120,7 +129,38 @@ def load_demo_patients(path: Path = DEMO_PATIENTS_FILE) -> list[dict[str, Any]]:
         raise DemoSeedError(f"{path} is not valid JSON: {exc.msg} (line {exc.lineno}).") from None
     if not isinstance(records, list) or not all(isinstance(record, dict) for record in records):
         raise DemoSeedError(f"{path} must contain a JSON list of patient objects.")
+    for number, record in enumerate(records, start=1):
+        problems = _record_problems(record)
+        if problems:
+            mrn = record["mrn"] if _is_text(record.get("mrn")) else "no MRN"
+            raise DemoSeedError(f"{path}: patient #{number} ({mrn}): {'; '.join(problems)}.")
     return records
+
+
+def _is_text(value: Any) -> TypeGuard[str]:
+    """Whether ``value`` is a non-blank string."""
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _record_problems(record: Mapping[str, Any]) -> list[str]:
+    """The structural problems of one patients.json record (empty when it can be loaded)."""
+    problems = []
+    missing = [field for field in REQUIRED_PATIENT_FIELDS if not _is_text(record.get(field))]
+    if missing:
+        problems.append(f"missing or empty field(s) {', '.join(missing)}")
+    vcf = record.get("vcf")
+    if _is_text(vcf) and Path(vcf).name != vcf:
+        problems.append(f"'vcf' must be a file name in {DEMO_VCF_DIR}, got {vcf!r}")
+    diagnosis = record.get("diagnosis")
+    if not isinstance(diagnosis, dict) or not _is_text(diagnosis.get("diabetes_type")):
+        problems.append("'diagnosis' must be an object with a 'diabetes_type'")
+    medications = record.get("medications", [])
+    if not isinstance(medications, list) or not all(
+        isinstance(medication, dict) and all(_is_text(medication.get(field)) for field in REQUIRED_MEDICATION_FIELDS)
+        for medication in medications
+    ):
+        problems.append("'medications' must be a list of objects with a 'drug_name' and a 'drug_class'")
+    return problems
 
 
 def seed_demo(
@@ -147,10 +187,13 @@ def seed_demo(
     is pushed for the duration and the seed is committed there, because that session ends with
     the context.
 
-    Inputs and demo files are checked before anything is changed. Raises :class:`DemoSeedError`
-    for an unknown rule set, a password that violates the policy, a missing demo file or —
-    without ``reset`` — a database that already holds patients, releases or rule versions. A
-    failure later on propagates from the service that raised it; the caller should roll back.
+    The options, the demo files and the rule sets are checked before anything is changed.
+    Raises :class:`DemoSeedError` for an unknown rule set, a password that violates the policy,
+    a missing or malformed demo file or — without ``reset`` — a database that already holds
+    patients, releases or rule versions; also, while loading, for a demo release or patient
+    record (values or VCF) that the services reject — the caller should then roll back. Any
+    other failure propagates from the service that raised it (a failed re-evaluation is
+    recorded as a failed run, SPEC §7.6).
 
     The summary holds ``users`` (username, full_name, role, created), ``rules`` (current rule
     versions), ``releases``, ``current_release``, ``patients``, ``uploads`` (by status),
@@ -173,13 +216,16 @@ def seed_demo(
 
 
 def _seed(*, rules: str, full: bool, activate_r2: bool, reset: bool, password: str | None) -> dict[str, Any]:
+    """Check every input, then load the demo dataset into the current session (see :func:`seed_demo`)."""
     if rules not in DEMO_RULE_SETS:
         raise DemoSeedError(f"Unknown demo rule set {rules!r}; expected one of: {', '.join(DEMO_RULE_SETS)}.")
     secret = demo_password(password)
     with_r2 = full or activate_r2
     apply_revision = full and rules != REVISED_RULE_SET
-    records = load_demo_patients()
+    records = load_demo_patients(DEMO_PATIENTS_FILE)
     _check_files(records, rules=rules, with_r2=with_r2, apply_revision=apply_revision)
+    rule_set = _load_rule_set(rules)
+    revised_rule_set = _load_rule_set(REVISED_RULE_SET) if apply_revision else None
 
     if reset:
         _reset_database()
@@ -191,15 +237,15 @@ def _seed(*, rules: str, full: bool, activate_r2: bool, reset: bool, password: s
     users, created_users = _ensure_users(secret)
     admin, clinician, lab = (users[demo.username] for demo in DEMO_USERS)
 
-    alerting.import_rule_versions(load_rule_set_file(DEMO_RULE_SETS[rules]), user=admin)
-    release_1 = clinvar.import_release(DEMO_RELEASE_1_FILE, label=RELEASE_1_LABEL, user=admin)
+    alerting.import_rule_versions(rule_set, user=admin)
+    release_1 = _import_demo_release(DEMO_RELEASE_1_FILE, RELEASE_1_LABEL, admin)
     runs = [reevaluation.activate_release(release_1, user=admin)]
     for record in records:
         _add_demo_patient(record, clinician=clinician, lab=lab)
-    if apply_revision:
-        runs.append(reevaluation.apply_rule_set(load_rule_set_file(DEMO_RULE_SETS[REVISED_RULE_SET]), user=admin))
+    if revised_rule_set is not None:
+        runs.append(reevaluation.apply_rule_set(revised_rule_set, user=admin))
     if with_r2:
-        release_2 = clinvar.import_release(DEMO_RELEASE_2_FILE, label=RELEASE_2_LABEL, user=admin)
+        release_2 = _import_demo_release(DEMO_RELEASE_2_FILE, RELEASE_2_LABEL, admin)
         runs.append(reevaluation.activate_release(release_2, user=admin))
 
     audit(
@@ -237,6 +283,23 @@ def _check_files(records: Sequence[Mapping[str, Any]], *, rules: str, with_r2: b
     missing = [str(path) for path in needed if not path.is_file()]
     if missing:
         raise DemoSeedError(f"Demo data file(s) not found: {', '.join(missing)}.")
+
+
+def _load_rule_set(name: str) -> dict[str, Any]:
+    """The validated document of demo rule set ``name`` (read before anything is changed)."""
+    path = DEMO_RULE_SETS[name]
+    try:
+        return load_rule_set_file(path)
+    except (OSError, RuleDefinitionError) as exc:
+        raise DemoSeedError(f"Demo rule set {path} cannot be loaded: {exc}") from exc
+
+
+def _import_demo_release(path: Path, label: str, admin: User) -> KbRelease:
+    """Import a demo ClinVar-format release (not yet current) imported by ``admin``."""
+    try:
+        return clinvar.import_release(path, label=label, user=admin)
+    except ValueError as exc:  # a file import_release refuses (validated before anything is written)
+        raise DemoSeedError(f"Demo release {path} could not be imported: {exc}") from exc
 
 
 def _reset_database() -> None:
@@ -294,42 +357,42 @@ def _ensure_users(password: str) -> tuple[dict[str, User], set[str]]:
     return users, created
 
 
-def _iso_date(value: str | None) -> date | None:
-    """An ISO ``YYYY-MM-DD`` date of patients.json, or None when absent."""
-    return date.fromisoformat(value) if value else None
-
-
 def _add_demo_patient(record: Mapping[str, Any], *, clinician: User, lab: User) -> None:
     """Record one demo patient (clinician: demographics, diagnosis, medications), then upload the VCF (lab).
 
     Medications come first, so the upload evaluates the patient against the current therapy and
-    the history starts with the final alerts instead of notes superseded a moment later.
+    the history starts with the final alerts instead of notes superseded a moment later. The
+    ISO date strings of patients.json are parsed and validated by the patient record service.
+    Raises :class:`DemoSeedError` naming the patient when the service rejects a value or the VCF.
     """
     diagnosis = record["diagnosis"]
-    patient = patient_records.create_patient(
-        mrn=record["mrn"],
-        given_name=record["given_name"],
-        family_name=record["family_name"],
-        sex=record["sex"],
-        birth_date=date.fromisoformat(record["birth_date"]),
-        family_id=record.get("family_id"),
-        notes=record.get("notes"),
-        diabetes_type=diagnosis["diabetes_type"],
-        age_at_diagnosis_months=diagnosis.get("age_at_diagnosis_months"),
-        diagnosed_on=_iso_date(diagnosis.get("diagnosed_on")),
-        user=clinician,
-    )
-    for medication in record.get("medications", []):
-        patient_records.add_medication(
-            patient,
-            drug_name=medication["drug_name"],
-            drug_class=medication["drug_class"],
-            dose=medication.get("dose"),
-            start_date=_iso_date(medication.get("start_date")),
+    try:
+        patient = patient_records.create_patient(
+            mrn=record["mrn"],
+            given_name=record["given_name"],
+            family_name=record["family_name"],
+            sex=record["sex"],
+            birth_date=record["birth_date"],
+            family_id=record.get("family_id"),
+            notes=record.get("notes"),
+            diabetes_type=diagnosis["diabetes_type"],
+            age_at_diagnosis_months=diagnosis.get("age_at_diagnosis_months"),
+            diagnosed_on=diagnosis.get("diagnosed_on"),
             user=clinician,
         )
-    vcf = DEMO_VCF_DIR / record["vcf"]
-    patient_records.ingest_vcf(patient, vcf.read_bytes(), vcf.name, user=lab)
+        for medication in record.get("medications", []):
+            patient_records.add_medication(
+                patient,
+                drug_name=medication["drug_name"],
+                drug_class=medication["drug_class"],
+                dose=medication.get("dose"),
+                start_date=medication.get("start_date"),
+                user=clinician,
+            )
+        vcf = DEMO_VCF_DIR / record["vcf"]
+        patient_records.ingest_vcf(patient, vcf.read_bytes(), vcf.name, user=lab)
+    except ValueError as exc:  # the services' validation errors, including VcfError for the VCF
+        raise DemoSeedError(f"Demo patient {record['mrn']} could not be loaded: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------

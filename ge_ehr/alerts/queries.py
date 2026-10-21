@@ -86,6 +86,10 @@ class InboxFilters:
             "reclassified": "1" if self.reclassified else "",
         }
 
+    def args_with(self, **changes: str) -> dict[str, str]:
+        """Query arguments of these filters with ``changes`` applied, empty values dropped (for links)."""
+        return {name: value for name, value in {**self.query_args(), **changes}.items() if value}
+
 
 def rule_codes() -> list[str]:
     """Stored rule codes in natural order (D1 … D6)."""
@@ -148,7 +152,7 @@ def inbox_summary() -> InboxSummary:
         select(Alert.severity, Alert.status, Alert.is_reclassified, Alert.priority, func.count(Alert.id))
         .where(Alert.status.in_(C.CURRENT_ALERT_STATUSES), Alert.kind == "alert")
         .group_by(Alert.severity, Alert.status, Alert.is_reclassified, Alert.priority)
-    ).tuples()
+    )
     by_severity: Counter[str] = Counter()
     reclassified = high_priority = awaiting = 0
     for severity, status, is_reclassified, priority, count in rows:
@@ -226,7 +230,8 @@ def notices_statement(status: str) -> Select[tuple[ReviewNotice]]:
 
 def notice_counts() -> dict[str, int]:
     """Number of review notices per status filter key."""
-    counts = dict(
-        db.session.execute(select(ReviewNotice.status, func.count(ReviewNotice.id)).group_by(ReviewNotice.status)).tuples()
+    rows = db.session.execute(
+        select(ReviewNotice.status, func.count(ReviewNotice.id)).group_by(ReviewNotice.status)
     )
+    counts = {notice_status: count for notice_status, count in rows}
     return {key: sum(counts.get(status, 0) for status in statuses) for key, statuses in NOTICE_FILTERS.items()}

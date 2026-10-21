@@ -1,0 +1,138 @@
+{#- Alerts inbox across all patients: high priority first, then severity, newest first. -#}
+{% extends "base.html" %}
+{% import "_macros.html" as ui %}
+{% import "patients/_patient_macros.html" as pm %}
+{% block title %}Alerts{% endblock %}
+{% block content %}
+{% call ui.page_header("Alerts", "Advisory decision-support alerts for all patients. High-priority (reclassified) alerts come first, then by severity and date.", icon="bell") %}
+  <a class="btn btn-outline-primary" href="{{ url_for('alerts.notices') }}"><i class="bi bi-clipboard2-pulse" aria-hidden="true"></i> Review notices{% if summary.open_notices %} <span class="badge rounded-pill nav-badge-notices">{{ summary.open_notices }}</span>{% endif %}</a>
+{% endcall %}
+
+<div class="row g-3 inbox-stats">
+  <div class="col-6 col-lg-3">{{ ui.stat_card("Awaiting review", summary.awaiting_review|number, "hourglass-split", href=url_for('alerts.inbox', status='active'), tone="warning", hint="Active current alerts") }}</div>
+  <div class="col-6 col-lg-3">{{ ui.stat_card("High priority", summary.high_priority|number, "flag", tone="danger", hint="Raised by a reclassification") }}</div>
+  <div class="col-6 col-lg-3">{{ ui.stat_card("Reclassified", summary.reclassified|number, "arrow-repeat", href=url_for('alerts.inbox', reclassified=1), tone="purple", hint="Current alerts after a new release") }}</div>
+  <div class="col-6 col-lg-3">{{ ui.stat_card("Open review notices", summary.open_notices|number, "clipboard2-pulse", href=url_for('alerts.notices'), tone="primary", hint="Superseded alerts to review") }}</div>
+</div>
+
+<nav class="severity-tabs" aria-label="Filter current alerts by severity">
+  <a class="severity-tab{% if not filters.severity %} is-active{% endif %}" href="{{ url_for('alerts.inbox', **filters.args_with(severity='')) }}"{% if not filters.severity %} aria-current="true"{% endif %}>All severities</a>
+  {% for severity in C.SEVERITIES %}
+  <a class="severity-tab severity-tab-{{ severity }}{% if filters.severity == severity %} is-active{% endif %}" href="{{ url_for('alerts.inbox', **filters.args_with(severity=severity)) }}"{% if filters.severity == severity %} aria-current="true"{% endif %}>
+    <span class="severity-dot" aria-hidden="true"></span>{{ severity|severity_label }}
+    <span class="severity-tab-count" title="Current alerts">{{ summary.by_severity[severity] }}</span></a>
+  {% endfor %}
+</nav>
+
+<form class="card filter-bar" method="get" action="{{ url_for('alerts.inbox') }}" role="search" aria-label="Filter alerts">
+  <div class="card-body">
+    <div class="row g-2 align-items-end">
+      <div class="col-6 col-md-3 col-lg-2">
+        <label class="form-label" for="filter-severity">Severity</label>
+        <select class="form-select" id="filter-severity" name="severity" data-autosubmit>
+          <option value="">All</option>
+          {% for severity in C.SEVERITIES %}<option value="{{ severity }}"{% if severity == filters.severity %} selected{% endif %}>{{ severity|severity_label }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="col-6 col-md-3 col-lg-3">
+        <label class="form-label" for="filter-status">Status</label>
+        <select class="form-select" id="filter-status" name="status" data-autosubmit>
+          {% for value, label in statuses.items() %}<option value="{{ value }}"{% if value == filters.status %} selected{% endif %}>{{ label }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="col-6 col-md-2 col-lg-2">
+        <label class="form-label" for="filter-rule">Rule</label>
+        <select class="form-select" id="filter-rule" name="rule" data-autosubmit>
+          <option value="">All rules</option>
+          {% for code in rule_codes %}<option value="{{ code }}"{% if code == filters.rule %} selected{% endif %}>{{ code }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="col-6 col-md-4 col-lg-2">
+        <label class="form-label" for="filter-kind">Show</label>
+        <select class="form-select" id="filter-kind" name="kind" data-autosubmit>
+          {% for value, label in kinds.items() %}<option value="{{ value }}"{% if value == filters.kind %} selected{% endif %}>{{ label }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="col-12 col-md-6 col-lg-1">
+        <div class="form-check filter-toggle">
+          <input class="form-check-input" type="checkbox" id="filter-reclassified" name="reclassified" value="1"{% if filters.reclassified %} checked{% endif %} data-autosubmit>
+          <label class="form-check-label" for="filter-reclassified">Reclassified</label>
+        </div>
+      </div>
+      <div class="col-12 col-md-6 col-lg-2 d-flex gap-2 justify-content-lg-end">
+        <button type="submit" class="btn btn-primary"><i class="bi bi-funnel" aria-hidden="true"></i> Apply</button>
+        {% if not filters.is_default %}<a class="btn btn-outline-secondary" href="{{ url_for('alerts.inbox') }}">Reset</a>{% endif %}
+      </div>
+    </div>
+  </div>
+</form>
+
+{{ ui.advisory_disclaimer() }}
+
+<div class="card card-table block-gap-sm">
+  <div class="table-responsive">
+    <table class="table table-app table-hover align-middle inbox-table">
+      <thead>
+        <tr>
+          <th scope="col" class="col-severity">Severity</th>
+          <th scope="col">Alert</th>
+          <th scope="col">Patient</th>
+          <th scope="col" class="d-none d-lg-table-cell">Variant</th>
+          <th scope="col" class="d-none d-xl-table-cell">Raised</th>
+          <th scope="col" class="text-end"><span class="visually-hidden">Actions</span></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for alert in pagination.items %}
+        <tr class="{{ 'row-priority' if alert.priority == 'high' and alert.is_current else '' }}">
+          <td class="inbox-severity">
+            {%- if alert.kind == "alert" %}{{ ui.severity_badge(alert.severity) }}{% else %}{{ ui.kind_badge("note") }}{% endif %}
+            {%- if alert.priority == "high" %}<span class="priority-flag"><i class="bi bi-flag-fill" aria-hidden="true"></i>High priority</span>{% endif %}
+          </td>
+          <td class="inbox-alert">
+            <a class="inbox-alert-title" href="{{ url_for('alerts.view_alert', alert_id=alert.id, next=return_url) }}">
+              <span class="rule-chip">{{ alert.confirmed_rule_version.label }}</span>{{ alert.title }}</a>
+            <div class="inbox-alert-message">{{ alert.message }}</div>
+            <div class="inbox-alert-flags">
+              {%- if alert.status != "active" %}{{ ui.status_badge(alert.status) }}{% endif %}
+              {%- if alert.is_reclassified %}{{ ui.reclassified_badge() }}{% endif %}
+            </div>
+          </td>
+          <td class="inbox-patient">{{ pm.patient_link(alert.patient) }}</td>
+          <td class="d-none d-lg-table-cell inbox-variant">
+            <div><span class="gene-symbol">{{ alert.variant_key.gene or "—" }}</span> {{ ui.class_badge(alert.classification) }}
+              <span class="small text-body-secondary">{{ pm.release_short(alert.confirmed_release) }}</span></div>
+            <code class="variant-key">{{ alert.variant_key.label }}</code>
+          </td>
+          <td class="d-none d-xl-table-cell text-nowrap">{{ alert.created_at|dt }}<div class="small text-body-secondary">{{ alert.trigger|trigger_label }}</div></td>
+          <td class="text-end inbox-actions">
+            <div class="table-actions">
+              {%- if alert.status == "active" %}
+              {{ ui.confirm_button(url_for('alerts.review_alert', alert_id=alert.id), "Review",
+                                   "Mark " ~ alert.confirmed_rule_version.label ~ " for " ~ alert.patient.display_name ~ " as reviewed? Open the alert to add a comment.",
+                                   variant="outline-primary", icon="check2", confirm_label="Mark reviewed", title="Review alert",
+                                   hidden={"next": return_url}) }}
+              {%- endif %}
+              <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('alerts.view_alert', alert_id=alert.id, next=return_url) }}" aria-label="Open {{ alert.confirmed_rule_version.label }} for {{ alert.patient.display_name }}">Open</a>
+            </div>
+          </td>
+        </tr>
+        {% else %}
+        <tr class="inbox-empty">
+          <td colspan="6">
+            {% if filters.is_default %}
+            {{ ui.empty_state("bell-slash", "No current alerts", "Alerts appear when a patient's classified variants and therapy meet a decision rule, after a VCF upload, a medication or diagnosis change, or a new knowledge-base release.") }}
+            {% else %}
+            {% call ui.empty_state("funnel", "No alerts match these filters", "Change or reset the filters to see more alerts.") %}
+              <a class="btn btn-outline-secondary" href="{{ url_for('alerts.inbox') }}">Reset filters</a>
+            {% endcall %}
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{ ui.pagination(pagination, "alerts.inbox", **filters.query_args()) }}
+{% endblock %}

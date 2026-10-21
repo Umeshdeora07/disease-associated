@@ -1,0 +1,204 @@
+{#- One re-evaluation run: counters, per-category / per-rule summary, variant changes, affected patients. -#}
+{% extends "base.html" %}
+{% import "_macros.html" as ui %}
+{% import "knowledge/_kb_macros.html" as kb with context %}
+{% block title %}Run #{{ run.id }}{% endblock %}
+{% block content %}
+{% set is_release = run.trigger == "clinvar_release" %}
+<nav aria-label="Breadcrumb"><ol class="breadcrumb kb-breadcrumb">
+  <li class="breadcrumb-item"><a href="{{ url_for('knowledge.runs') }}">Re-evaluation runs</a></li>
+  <li class="breadcrumb-item active" aria-current="page">Run #{{ run.id }}</li>
+</ol></nav>
+{% set new_label = run.new_release.label if run.new_release else "no knowledge-base release" %}
+{% if is_release and summary.initial %}
+  {% set subtitle = (run.strategy|strategy_label) ~ " · first activation of " ~ new_label ~ " (initial classification)" %}
+{% elif is_release %}
+  {% set subtitle = (run.strategy|strategy_label) ~ " re-evaluation · " ~ (run.old_release.label if run.old_release else "no release") ~ " → " ~ new_label %}
+{% elif run.trigger == "rule_revision" %}
+  {% set subtitle = (run.strategy|strategy_label) ~ " re-evaluation of the revised rules under " ~ new_label %}
+{% else %}
+  {% set subtitle = "Every patient re-evaluated under " ~ new_label ~ " and the current rules" %}
+{% endif %}
+{% call ui.page_header("Run #" ~ run.id ~ " · " ~ (run.trigger|trigger_label), subtitle, icon="arrow-repeat") %}
+  {% if is_release and run.old_release and run.new_release %}
+  <a class="btn btn-outline-primary" href="{{ url_for('knowledge.compare_releases', old=run.old_release.id, new=run.new_release.id) }}"><i class="bi bi-arrow-left-right" aria-hidden="true"></i> Compare releases</a>
+  {% elif run.trigger == "rule_revision" %}
+  <a class="btn btn-outline-primary" href="{{ url_for('knowledge.rules') }}"><i class="bi bi-journal-medical" aria-hidden="true"></i> Current rules</a>
+  {% endif %}
+  <a class="btn btn-outline-secondary" href="{{ url_for('knowledge.runs') }}">All runs</a>
+{% endcall %}
+
+<div class="page-meta">
+  {{ ui.status_badge(run.status) }}
+  <span class="meta-item"><i class="bi bi-calendar-event" aria-hidden="true"></i>{{ run.started_at|dt }}</span>
+  <span class="meta-item"><i class="bi bi-stopwatch" aria-hidden="true"></i>{{ run.duration_ms|duration_ms }}</span>
+  <span class="meta-item"><i class="bi bi-person" aria-hidden="true"></i>{{ run.initiated_by.full_name if run.initiated_by else "System" }}</span>
+  {% if run.trigger == "rule_revision" %}<span class="meta-item version-chip-row">{{ kb.rule_changes(run.rule_change or []) }}</span>{% endif %}
+</div>
+
+{% if run.status == "failed" %}
+<div class="alert alert-danger" role="alert">
+  <i class="bi bi-x-octagon-fill" aria-hidden="true"></i>
+  <div class="alert-body"><strong>The run failed and was rolled back.</strong> No alert, notice or classification changed{% if is_release %} and the release was not made current{% endif %}.
+    <pre class="run-error">{{ run.error or "No error text was recorded." }}</pre></div>
+</div>
+{% elif run.status == "running" %}
+<div class="alert alert-info" role="status"><i class="bi bi-hourglass-split" aria-hidden="true"></i><div class="alert-body">This run has not finished; its counters are not final.</div></div>
+{% endif %}
+
+<h2 class="section-title">Work</h2>
+<div class="row g-3 mb-4 stat-row">
+  {% if is_release %}
+  <div class="col-6 col-md-4 col-xl">{{ ui.stat_card("Stored keys compared", run.stored_keys_compared|number, "key") }}</div>
+  <div class="col-6 col-md-4 col-xl">{{ ui.stat_card("Changed variants", run.changed_variants|number, "arrow-left-right", tone="purple") }}</div>
+  {% endif %}
+  <div class="col-6 col-md-4 col-xl">{{ ui.stat_card("Carriers affected", run.carriers_affected|number, "people") }}</div>
+  <div class="col-6 col-md-4 col-xl">{{ ui.stat_card("Patients re-evaluated", run.patients_reevaluated|number, "person-check") }}</div>
+  <div class="col-6 col-md-4 col-xl">{{ ui.stat_card("Records examined", run.records_examined|number, "list-check", hint=("of all patient variants" if run.strategy == "full" else "carrier × changed-key records" if is_release else none)) }}</div>
+</div>
+<h2 class="section-title">Outcome</h2>
+<div class="row g-3 mb-4 stat-row">
+  <div class="col-6 col-md-4 col-xl">{{ ui.stat_card("Alerts created", run.alerts_created|number, "bell-fill", tone="danger" if run.alerts_created else "primary", hint=(run.notes_created|number ~ " note" ~ ("" if run.notes_created == 1 else "s") ~ " created")) }}</div>
+  <div class="col-6 col-md-4 col-xl">{{ ui.stat_card("Superseded", run.alerts_superseded|number, "slash-circle") }}</div>
+  <div class="col-6 col-md-4 col-xl">{{ ui.stat_card("Provenance confirmed", run.alerts_confirmed|number, "patch-check-fill", tone="success") }}</div>
+  <div class="col-6 col-md-4 col-xl">{{ ui.stat_card("Review notices", run.review_notices|number, "clipboard2-pulse", tone="warning" if run.review_notices else "primary", href=url_for('alerts.notices') if run.review_notices else none) }}</div>
+  <div class="col-6 col-md-4 col-xl">{{ ui.stat_card("Notifications", run.notifications|number, "send", tone="purple" if run.notifications else "primary", hint="alerts that notify + notices") }}</div>
+</div>
+
+{% if summary.categories %}
+<section class="card card-table" aria-labelledby="categories-title">
+  <div class="card-header"><h2 class="card-heading" id="categories-title"><i class="bi bi-signpost-split" aria-hidden="true"></i> By change category</h2></div>
+  <div class="table-responsive">
+    <table class="table table-app align-middle summary-table">
+      <thead><tr><th scope="col">Category</th><th scope="col" class="text-end">Changed</th><th scope="col" class="text-end">Carriers</th>
+        {% for field, label in outcome_fields %}<th scope="col" class="text-end{% if not loop.first and loop.index < 4 %} d-none d-md-table-cell{% endif %}">{{ label }}</th>{% endfor %}</tr></thead>
+      <tbody>
+        {% for name, counts in summary.categories %}
+        <tr>
+          <th scope="row">{{ kb.category_badge(name) }}</th>
+          {{ kb.count_cell(counts.changed_variants) }}
+          {{ kb.count_cell(counts.carriers) }}
+          {% for field, label in outcome_fields %}{{ kb.count_cell(counts.get(field, 0), class_=("d-none d-md-table-cell" if not loop.first and loop.index < 4 else "")) }}{% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+
+{% if summary.rules %}
+<section class="card card-table" aria-labelledby="rules-title">
+  <div class="card-header"><h2 class="card-heading" id="rules-title"><i class="bi bi-journal-medical" aria-hidden="true"></i> By rule</h2></div>
+  <div class="table-responsive">
+    <table class="table table-app align-middle summary-table">
+      <thead><tr><th scope="col">Rule</th>{% for field, label in outcome_fields %}<th scope="col" class="text-end">{{ label }}</th>{% endfor %}</tr></thead>
+      <tbody>
+        {% for code, counts in summary.rules %}
+        <tr><th scope="row"><a href="{{ url_for('knowledge.rules', _anchor='rule-' ~ code) }}">{{ code }}</a></th>
+          {% for field, label in outcome_fields %}{{ kb.count_cell(counts.get(field, 0)) }}{% endfor %}</tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+
+<div class="row g-4">
+  {% if summary.genes or summary.superseded_by_reason %}
+  <div class="col-xl-4 order-xl-2">
+    {% if summary.genes %}
+    <section class="card card-table" aria-labelledby="genes-title">
+      <div class="card-header"><h2 class="card-heading" id="genes-title"><i class="bi bi-bar-chart-line" aria-hidden="true"></i> By gene</h2></div>
+      <div class="table-responsive">
+        <table class="table table-app table-sm align-middle">
+          <thead><tr><th scope="col">Gene</th>{% if is_release %}<th scope="col" class="text-end">Changed</th>{% endif %}<th scope="col" class="text-end">Carriers</th></tr></thead>
+          <tbody>
+            {% for gene, counts in summary.genes %}
+            <tr><th scope="row">{{ ui.gene(gene) }}</th>{% if is_release %}{{ kb.count_cell(counts.get("changed_variants", 0)) }}{% endif %}{{ kb.count_cell(counts.get("carriers", 0)) }}</tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+    {% endif %}
+    {% if summary.superseded_by_reason %}
+    <section class="card" aria-labelledby="reasons-title">
+      <div class="card-header"><h2 class="card-heading" id="reasons-title"><i class="bi bi-slash-circle" aria-hidden="true"></i> Superseded by reason</h2></div>
+      <div class="card-body">
+        <ul class="reason-list">
+          {% for reason, count in summary.superseded_by_reason %}<li><span>{{ reason|superseded_reason_label }}</span><span class="kb-count">{{ count|number }}</span></li>{% endfor %}
+        </ul>
+      </div>
+    </section>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <div class="{{ 'col-xl-8 order-xl-1' if summary.genes or summary.superseded_by_reason else 'col-12' }}">
+    {% if is_release %}
+    <section class="card card-table" aria-labelledby="changes-title">
+      <div class="card-header">
+        <h2 class="card-heading" id="changes-title"><i class="bi bi-list-ul" aria-hidden="true"></i> Variant changes</h2>
+        <span class="small text-body-secondary">Stored patient variant keys whose class or mechanism changed</span>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-app align-middle change-table">
+          <thead><tr><th scope="col">Variant</th><th scope="col">Change</th><th scope="col" class="d-none d-md-table-cell">Category</th><th scope="col">Carriers</th></tr></thead>
+          <tbody>
+            {% for change in changes.items %}
+            {% set patients = carriers.get(change.variant_key_id, []) %}
+            <tr>
+              <td>{{ ui.gene(change.gene) }} {{ ui.variant_key(change.variant_key.label) }}</td>
+              <td>{{ kb.class_change(change.old_classification, change.new_classification) }}
+                <div>{{ kb.mechanism_change(change.old_mechanism, change.new_mechanism) }}</div>
+                <div class="d-md-none mt-1">{{ kb.category_badge(change.category) }}</div></td>
+              <td class="d-none d-md-table-cell">{{ kb.category_badge(change.category) }}</td>
+              <td class="carrier-cell">
+                <span class="kb-count" title="Carriers when the run happened">{{ change.carrier_count|number }}</span>
+                {% for patient in patients[:carriers_shown] %}<a class="carrier-chip" href="{{ url_for('patients.recommendations', patient_id=patient.id) }}" title="Recommendations of {{ patient.display_name }}">{{ patient.mrn }}</a>{% endfor %}
+                {% if patients|length > carriers_shown %}<span class="small text-body-secondary">+{{ patients|length - carriers_shown }} more</span>{% endif %}
+              </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="4">{{ ui.empty_state("check2-circle", "No stored variant changed", "The releases agree on every variant a patient carries, so nothing was re-evaluated." if run.status != "failed" else "The run failed before any change was recorded.") }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+    {{ ui.pagination(changes, "knowledge.view_run", run_id=run.id) }}
+    {% endif %}
+
+    <section class="card card-table" aria-labelledby="affected-title">
+      <div class="card-header">
+        <h2 class="card-heading" id="affected-title"><i class="bi bi-people" aria-hidden="true"></i> Affected patients</h2>
+        <span class="small text-body-secondary">{{ affected_total|number }} {{ "patient" if affected_total == 1 else "patients" }} with changed findings{% if affected_total > affected|length %} · first {{ affected|length }} by MRN{% endif %}</span>
+      </div>
+      {% if affected %}
+      <div class="table-responsive">
+        <table class="table table-app align-middle affected-table">
+          <thead><tr><th scope="col">Patient</th><th scope="col" class="text-end">Alerts</th><th scope="col" class="text-end d-none d-sm-table-cell">Notes</th><th scope="col" class="text-end">Superseded</th><th scope="col" class="text-end d-none d-md-table-cell">Confirmed</th><th scope="col" class="text-end d-none d-sm-table-cell">Notices</th><th scope="col" class="text-end"><span class="d-none d-md-inline">Notified</span><span class="d-md-none" title="Notifications"><i class="bi bi-send" aria-hidden="true"></i><span class="visually-hidden">Notifications</span></span></th></tr></thead>
+          <tbody>
+            {% for item in affected %}
+            <tr>
+              <td><a class="fw-semibold" href="{{ url_for('patients.recommendations', patient_id=item.patient.id) }}">{{ item.patient.display_name }}</a>
+                <div class="small text-body-secondary font-monospace">{{ item.patient.mrn }}</div></td>
+              {{ kb.count_cell(item.alerts_created) }}
+              {{ kb.count_cell(item.notes_created, class_="d-none d-sm-table-cell") }}
+              {{ kb.count_cell(item.superseded) }}
+              {{ kb.count_cell(item.confirmed, class_="d-none d-md-table-cell") }}
+              {{ kb.count_cell(item.notices, class_="d-none d-sm-table-cell") }}
+              {{ kb.count_cell(item.notifications) }}
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="card-body">{{ ui.empty_state("person-check", "No patient's findings changed", "Every re-evaluated patient kept exactly the same alerts and notes.") }}</div>
+      {% endif %}
+    </section>
+  </div>
+</div>
+{% endblock %}

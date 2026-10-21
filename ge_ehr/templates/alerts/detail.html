@@ -1,0 +1,127 @@
+{#- One alert or note: recommendation, rule criteria, provenance timeline and clinician review. -#}
+{% extends "base.html" %}
+{% import "_macros.html" as ui %}
+{% import "patients/_patient_macros.html" as pm %}
+{% set rule_label = alert.confirmed_rule_version.label %}
+{% block title %}{{ rule_label }} · {{ alert.patient.display_name }}{% endblock %}
+{% block content %}
+{{ pm.breadcrumb([("Alerts", url_for("alerts.inbox")),
+                  (alert.patient.display_name, url_for("patients.recommendations", patient_id=alert.patient.id)),
+                  (rule_label ~ " " ~ alert.kind, none)]) }}
+
+<header class="alert-hero alert-hero-{{ alert.severity or 'note' }}">
+  <div class="alert-hero-text">
+    <div class="alert-hero-badges">
+      {%- if alert.kind == "alert" %}{{ ui.severity_badge(alert.severity) }}{% else %}{{ ui.kind_badge("note") }}{% endif %}
+      <span class="rule-chip">{{ rule_label }}</span>
+      {{ pm.finding_badges(alert) }}
+    </div>
+    <h1 class="alert-hero-title">{{ alert.title }}</h1>
+    <p class="alert-hero-patient">
+      {{ "Alert" if alert.kind == "alert" else "Information note" }} for
+      <a href="{{ url_for('patients.view_patient', patient_id=alert.patient.id) }}">{{ alert.patient.display_name }}</a>
+      <span class="mrn-tag">{{ alert.patient.mrn }}</span>
+    </p>
+  </div>
+  <div class="page-header-actions">
+    <a class="btn btn-outline-secondary" href="{{ back_url }}"><i class="bi bi-arrow-left" aria-hidden="true"></i> Back</a>
+    <a class="btn btn-outline-primary" href="{{ url_for('patients.recommendations', patient_id=alert.patient.id) }}"><i class="bi bi-clipboard2-check" aria-hidden="true"></i> All recommendations</a>
+  </div>
+</header>
+
+{% if alert.status == "superseded" %}
+<div class="alert alert-secondary superseded-note" role="status">
+  <i class="bi bi-slash-circle" aria-hidden="true"></i>
+  <div class="alert-body">
+    <strong>Superseded on {{ alert.superseded_at|dt }}</strong> — {{ alert.superseded_reason|superseded_reason_label|lower }}.
+    {%- if alert.superseded_run %} See <a href="{{ url_for('knowledge.view_run', run_id=alert.superseded_run.id) }}">run #{{ alert.superseded_run.id }}</a>.{% endif %}
+    This record is kept unchanged for the audit trail{% if alert.review_notice %}; a <a href="{{ url_for('alerts.notices', status='all') }}">review notice</a> asked a clinician to check any treatment change made on its basis{% endif %}.
+  </div>
+</div>
+{% endif %}
+
+<div class="row g-4">
+  <div class="col-lg-8">
+    <section class="card" aria-labelledby="recommendation-title">
+      <div class="card-header"><h2 class="card-title-text" id="recommendation-title"><i class="bi bi-chat-square-text" aria-hidden="true"></i> {{ "Recommendation" if alert.kind == "alert" else "Note" }}</h2></div>
+      <div class="card-body">
+        <p class="recommendation-text">{{ alert.message }}</p>
+        <dl class="dl-grid recommendation-meta">
+          <dt>Evidence source</dt><dd>{{ alert.source or "—" }}</dd>
+          <dt>Genetic criterion</dt><dd>{{ criteria.genetic }}</dd>
+          <dt>Clinical condition</dt><dd>{{ criteria.clinical }}</dd>
+          {% if alert.confirmed_rule_version.change_note %}<dt>Rule change note</dt><dd>{{ alert.confirmed_rule_version.change_note }}</dd>{% endif %}
+        </dl>
+        {{ ui.advisory_disclaimer() }}
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="provenance-title">
+      <div class="card-header">
+        <div>
+          <h2 class="card-title-text" id="provenance-title"><i class="bi bi-diagram-3" aria-hidden="true"></i> Provenance</h2>
+          <p class="card-subtitle-text">Every event with the release and rule version behind it. Alerts are never deleted.</p>
+        </div>
+      </div>
+      <div class="card-body">{{ pm.provenance_timeline(alert.events) }}</div>
+    </section>
+  </div>
+
+  <div class="col-lg-4">
+    <section class="card" id="review" aria-labelledby="review-title">
+      <div class="card-header"><h2 class="card-title-text" id="review-title"><i class="bi bi-check2-square" aria-hidden="true"></i> Clinician review</h2></div>
+      <div class="card-body">
+        {% if alert.status == "active" %}
+        <form method="post" action="{{ url_for('alerts.review_alert', alert_id=alert.id) }}" novalidate aria-label="Review this {{ alert.kind }}">
+          {{ form.hidden_tag() }}
+          {{ ui.render_form_errors(form) }}
+          {{ ui.render_field(form.comment) }}
+          <button type="submit" class="btn btn-primary w-100"><i class="bi bi-check2" aria-hidden="true"></i> Mark as reviewed</button>
+          <p class="form-text mt-2 mb-0">The {{ alert.kind }} stays current; reviewing records that a clinician has looked at it.</p>
+        </form>
+        {% elif alert.reviewed_at %}
+        <div class="finding-review">
+          <i class="bi bi-check2-circle" aria-hidden="true"></i>
+          <div>Reviewed by <strong>{{ alert.reviewed_by.full_name if alert.reviewed_by else "an unknown user" }}</strong> on {{ alert.reviewed_at|dt }}
+            {%- if alert.review_comment %}<blockquote class="notice-comment">{{ alert.review_comment }}</blockquote>{% endif %}</div>
+        </div>
+        {% else %}
+        <p class="muted-empty mb-0"><i class="bi bi-slash-circle" aria-hidden="true"></i> Superseded before it was reviewed. Superseded findings cannot be reviewed.</p>
+        {% endif %}
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="variant-title">
+      <div class="card-header"><h2 class="card-title-text" id="variant-title"><i class="bi bi-diagram-2" aria-hidden="true"></i> Variant</h2></div>
+      <div class="card-body">
+        <dl class="dl-grid dl-grid-compact">
+          <dt>Gene</dt><dd><span class="gene-symbol">{{ alert.variant_key.gene or "—" }}</span></dd>
+          <dt>Key</dt><dd><code class="variant-key">{{ alert.variant_key.label }}</code></dd>
+          {% set variant = alert.patient_variant %}
+          {% if variant %}
+          <dt>Zygosity</dt><dd>{{ variant.zygosity|humanize }}</dd>
+          <dt>Now</dt><dd>{{ ui.class_badge(variant.current_classification) }} {{ variant.current_classification|class_label }}
+            {%- if variant.is_amended %} {{ ui.amended_badge() }}{% endif %}
+            {%- if variant.classification_release %}<div class="small text-body-secondary">{{ variant.classification_release.label }}</div>{% endif %}</dd>
+          {% endif %}
+          <dt>At creation</dt><dd>{{ ui.class_badge(alert.classification) }} {{ alert.classification|class_label }}</dd>
+        </dl>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="record-title">
+      <div class="card-header"><h2 class="card-title-text" id="record-title"><i class="bi bi-info-square" aria-hidden="true"></i> Record</h2></div>
+      <div class="card-body">
+        <dl class="dl-grid dl-grid-compact">
+          <dt>Status</dt><dd>{{ ui.status_badge(alert.status) }}</dd>
+          <dt>Raised</dt><dd>{{ alert.created_at|dt }}<div class="small text-body-secondary">{{ alert.trigger|trigger_label }}{% if alert.created_run %} · <a href="{{ url_for('knowledge.view_run', run_id=alert.created_run.id) }}">run #{{ alert.created_run.id }}</a>{% endif %}</div></dd>
+          <dt>Created with</dt><dd>{{ alert.created_rule_version.label }} · {{ alert.created_release.label if alert.created_release else "no release" }}</dd>
+          <dt>Confirmed with</dt><dd>{{ alert.confirmed_rule_version.label }} · {{ alert.confirmed_release.label if alert.confirmed_release else "no release" }}</dd>
+          <dt>Notification</dt><dd>{{ "Clinician notified" if alert.notify else "Silent (no notification)" }}</dd>
+        </dl>
+      </div>
+    </section>
+
+  </div>
+</div>
+{% endblock %}

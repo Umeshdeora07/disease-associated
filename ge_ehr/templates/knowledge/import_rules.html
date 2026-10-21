@@ -1,0 +1,96 @@
+{#- Import a rule-set JSON document (admin): validate, preview, apply with re-evaluation. -#}
+{% extends "base.html" %}
+{% import "_macros.html" as ui %}
+{% block title %}Import rule set{% endblock %}
+{% block content %}
+<nav aria-label="Breadcrumb"><ol class="breadcrumb kb-breadcrumb">
+  <li class="breadcrumb-item"><a href="{{ url_for('knowledge.rules') }}">Rules</a></li>
+  <li class="breadcrumb-item active" aria-current="page">Import</li>
+</ol></nav>
+{{ ui.page_header("Import a rule set",
+    "Upload or paste a rule-set JSON document. New versions are stored next to the old ones and every revised rule is re-run for the carriers of its genes.",
+    icon="journal-plus") }}
+
+{% if preview %}
+<section class="card preview-card" aria-labelledby="preview-title">
+  <div class="card-header">
+    <h2 class="card-heading" id="preview-title"><i class="bi bi-check2-circle" aria-hidden="true"></i> Valid rule set{% if preview.label %} “{{ preview.label }}”{% endif %}</h2>
+    <span class="small text-body-secondary">{{ preview.rows|length }} {{ "definition" if preview.rows|length == 1 else "definitions" }} ·
+      {{ preview.revisions }} would become current</span>
+  </div>
+  <div class="table-responsive">
+    <table class="table table-app align-middle">
+      <thead><tr><th scope="col">Rule</th><th scope="col">Criteria</th><th scope="col" class="d-none d-md-table-cell">Severity</th><th scope="col">On import</th></tr></thead>
+      <tbody>
+        {% for row in preview.rows %}
+        <tr>
+          <td class="text-nowrap"><span class="fw-semibold">{{ row.spec.label }}</span><div class="small text-body-secondary">{{ row.spec.kind|humanize }}</div></td>
+          <td><div class="fw-semibold">{{ row.spec.title }}</div><div class="small">{{ row.genetic }}</div><div class="small text-body-secondary">{{ row.clinical }}</div></td>
+          <td class="d-none d-md-table-cell">{{ ui.severity_badge(row.spec.severity) }}</td>
+          <td><span class="badge preview-status preview-status-{{ row.status|replace('_', '-') }}">{{ preview_labels[row.status] }}</span>
+            {% if row.current_version is not none and row.status != "unchanged" %}<div class="small text-body-secondary">current: v{{ row.current_version }}</div>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="card-footer small text-body-secondary">
+    {% if preview.revisions %}Nothing has been stored yet. The validated JSON is in the text box below — choose a strategy and press “Import and re-evaluate” to apply it.
+    {% else %}Every rule in this set is already current; importing it would log a run without changing any alert.{% endif %}
+  </div>
+</section>
+{% endif %}
+
+<div class="row g-4">
+  <div class="col-lg-7">
+    <form class="card" method="post" action="{{ url_for('knowledge.import_rules') }}" enctype="multipart/form-data" novalidate>
+      <div class="card-header"><span><i class="bi bi-braces" aria-hidden="true"></i> Rule-set document</span></div>
+      <div class="card-body">
+        {{ form.csrf_token }}
+        {{ ui.render_form_errors(form) }}
+        {{ ui.render_field(form.rules_file) }}
+        <div class="or-divider" aria-hidden="true"><span>or</span></div>
+        {{ ui.render_field(form.rules_json, class_="font-monospace code-input", help="Paste the whole document, from the opening { to the closing }.") }}
+        {{ ui.render_field(form.strategy, wrapper_class="mb-0") }}
+      </div>
+      <div class="card-footer form-footer">
+        {{ form.submit(class_="btn btn-primary") }}
+        {{ form.validate_only(class_="btn btn-outline-primary") }}
+        <a class="btn btn-outline-secondary" href="{{ url_for('knowledge.rules') }}">Cancel</a>
+      </div>
+    </form>
+  </div>
+  <div class="col-lg-5">
+    <section class="card" aria-labelledby="rules-help-title">
+      <div class="card-header"><h2 class="card-heading" id="rules-help-title"><i class="bi bi-info-circle" aria-hidden="true"></i> How rule revisions work</h2></div>
+      <div class="card-body">
+        <ol class="step-list">
+          <li><strong>Validate.</strong> Every rule is checked strictly; an error names the rule and the field. A stored version can never change: publish a correction as a new version.</li>
+          <li><strong>Store.</strong> Unseen versions are added; the highest version of each rule becomes current.</li>
+          <li><strong>Re-run.</strong> Each revised rule is re-run for the carriers of its old and new genes. Patients are notified only when the outcome changes — e.g. D4 v2 adds ABCC8, so ABCC8 carriers on insulin are newly alerted. A withdrawn alert raises a review notice.</li>
+        </ol>
+        <details class="json-example">
+          <summary>Document format</summary>
+<pre class="code-block"><code>{
+  "rule_set": "GE-EHR monogenic diabetes rules",
+  "label": "v2 (2026)",
+  "rules": [{
+    "code": "D2", "version": 1, "kind": "treatment",
+    "title": "HNF1A diabetes on insulin or metformin",
+    "genetic": {"genes": ["HNF1A"], "classes": ["P", "LP"],
+                "mechanism": null},
+    "clinical": {"any_of_drug_classes": ["insulin", "metformin"],
+                 "none_of_drug_classes": ["sulfonylurea"]},
+    "severity": "high",
+    "recommendation": "Consider low-dose sulfonylurea …",
+    "source": "Kang et al. 2021; Naylor et al. 2024",
+    "change_note": "Initial version"
+  }]
+}</code></pre>
+          <p class="small text-body-secondary mb-0"><code>clinical: null</code> means no therapy condition. Allowed keys: <code>any_of_drug_classes</code>, <code>none_of_drug_classes</code>, <code>max_age_at_diagnosis_months</code>.</p>
+        </details>
+      </div>
+    </section>
+  </div>
+</div>
+{% endblock %}

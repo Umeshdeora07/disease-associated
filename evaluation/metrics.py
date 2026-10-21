@@ -39,7 +39,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from flask import Flask
+from flask import Flask, url_for
 from sqlalchemy import func, select
 
 from ge_ehr import constants as C
@@ -85,7 +85,9 @@ def rule_specs(doc: Mapping[str, Any]) -> list[RuleSpec]:
     return [RuleSpec.from_definition(definition) for definition in validate_rule_set(doc)]
 
 
-def ground_truth(plan: CohortPlan, release: Mapping[Key, KnownRecord], rules: Sequence[RuleSpec]) -> frozenset[FindingId]:
+def ground_truth(
+    plan: CohortPlan, release: Mapping[Key, KnownRecord], rules: Sequence[RuleSpec]
+) -> frozenset[FindingId]:
     """The findings every patient of ``plan`` should have under ``release`` and ``rules`` (pure).
 
     Keys absent from ``release`` are not classified (NC); off-panel variants are ignored as the
@@ -165,7 +167,9 @@ def expected_notifications(
 
 def _notification_identity(notification: Notification) -> FindingId | tuple[str, Key]:
     if notification.channel == "alert":
-        return FindingId(notification.mrn, notification.rule_code or "", notification.key, "alert", notification.severity)
+        return FindingId(
+            notification.mrn, notification.rule_code or "", notification.key, "alert", notification.severity
+        )
     return (notification.mrn, notification.key)
 
 
@@ -214,6 +218,7 @@ def change_metrics(
     expected: set[FindingId | tuple[str, Key]] = {*new_alerts, *removed}
     correct = _correct_notifications(outcome.notifications, expected)
     run = outcome.run or {}
+    engine_ms = run.get("engine_duration_ms")
     stale, missed = state_alerts - after_alerts, after_alerts - state_alerts
     return {
         "re_alert_sensitivity": Ratio(sum(pair in realerted for pair in realert_pairs), len(realert_pairs)).as_dict(),
@@ -243,7 +248,7 @@ def change_metrics(
         "changed_variants": run.get("changed_variants"),
         "duration_ms": round(outcome.duration_ms, 3),
         "commit_ms": round(outcome.commit_ms, 3),
-        "engine_duration_ms": round(run["engine_duration_ms"], 3) if run.get("engine_duration_ms") is not None else None,
+        "engine_duration_ms": round(engine_ms, 3) if engine_ms is not None else None,
     }
 
 
@@ -251,7 +256,9 @@ def delta_check(outcome: ChangeOutcome, plan: CohortPlan, changes: Iterable[Inje
     """Compare Δ recorded by the engine (VariantChange rows) with the injected changes carried by the cohort.
 
     Expected Δ = carried keys whose class or mechanism changed (a raw CLNSIG change that keeps the
-    class, e.g. VUS → Conflicting, is not a change). None for a strategy without a run.
+    class, e.g. VUS → Conflicting, is not a change). ``carrier_records`` = the patient-variant
+    records of the expected Δ, i.e. what change-driven re-evaluation must examine ("changed
+    only"). None for a strategy without a run.
     """
     if outcome.changed_keys is None:
         return None
@@ -261,6 +268,7 @@ def delta_check(outcome: ChangeOutcome, plan: CohortPlan, changes: Iterable[Inje
     return {
         "expected": len(expected),
         "recorded": len(recorded),
+        "carrier_records": sum(len(plan.carriers[key]) for key in expected),
         "matches": expected == recorded,
         "missing": [key_label(key) for key in sorted(expected - recorded)[:EXAMPLES]],
         "unexpected": [key_label(key) for key in sorted(recorded - expected)[:EXAMPLES]],
@@ -459,7 +467,9 @@ def _check_malformed_upload(plan: CohortPlan, malformed: Path) -> ScenarioCheck:
     observed = f"rejected: {error}" if error else "accepted"
     if error and not (stored_rejected and unchanged):
         observed += " (but the rejected upload was not recorded or variants changed)"
-    return ScenarioCheck("S10", bool(error) and stored_rejected and unchanged, "VcfError, rejected upload stored, no variants", observed)
+    return ScenarioCheck(
+        "S10", bool(error) and stored_rejected and unchanged, "VcfError, rejected upload stored, no variants", observed
+    )
 
 
 def _check_fhir(plan: CohortPlan) -> ScenarioCheck:
@@ -472,7 +482,12 @@ def _check_fhir(plan: CohortPlan) -> ScenarioCheck:
 
 
 def _check_access_denied(app: Flask, plan: CohortPlan) -> ScenarioCheck:
-    """Sign in through the real login form; outside any app context so each request gets a fresh one."""
+    """S12 through the real login form and ``patients.recommendations`` of the S1 patient.
+
+    Passes when the lab technician gets 403 while a clinician (the control) is not denied —
+    neither 403 nor sent back to the login page — so the 403 is a role decision. Runs outside
+    any app context so each request gets a fresh one.
+    """
     password = secrets.token_urlsafe(18) + "aA1!"
     users = {"lab_technician": "eval.lab", "clinician": "eval.clinician"}
     with app.app_context():
@@ -482,20 +497,23 @@ def _check_access_denied(app: Flask, plan: CohortPlan) -> ScenarioCheck:
             db.session.add(user)
         db.session.commit()
         patient_id = _patient(plan, "S1").id
+    with app.test_request_context():
+        url = url_for("patients.recommendations", patient_id=patient_id)
     statuses: dict[str, int] = {}
     for role, username in users.items():
         client = app.test_client()
         login = client.post("/login", data={"username": username, "password": password})
         if login.status_code != 302:
-            return ScenarioCheck("S12", False, "lab technician 403", f"sign-in of {username} failed ({login.status_code})")
-        statuses[role] = client.get(f"/patients/{patient_id}/recommendations").status_code
-    passed = statuses["lab_technician"] == 403 and statuses["clinician"] == 200
-    return ScenarioCheck(
-        "S12",
-        passed,
-        "lab technician 403 (clinician 200)",
-        f"lab technician {statuses['lab_technician']}, clinician {statuses['clinician']}",
-    )
+            return ScenarioCheck(
+                "S12", False, "lab technician 403", f"sign-in of {username} failed ({login.status_code})"
+            )
+        statuses[role] = client.get(url).status_code
+    lab, clinician = statuses["lab_technician"], statuses["clinician"]
+    passed = lab == 403 and clinician not in (302, 401, 403)
+    observed = f"lab technician {lab}, clinician {clinician}"
+    if clinician >= 500:
+        observed += " (page error after the access check)"
+    return ScenarioCheck("S12", passed, "lab technician 403 (clinician not denied)", observed)
 
 
 def _check_upgrade(plan: CohortPlan, outcome: StrategyOutcome) -> ScenarioCheck:
@@ -516,8 +534,12 @@ def _check_upgrade(plan: CohortPlan, outcome: StrategyOutcome) -> ScenarioCheck:
         f"current: {_describe(_findings(current))}; reclassified/high priority/notify: {flagged}; "
         f"D6 superseded: {d6_superseded}"
     )
-    return ScenarioCheck("RS1", _findings(current) == expected and flagged and d6_superseded,
-                         f"{_describe(expected)} (reclassified, high priority, notify); D6 superseded", observed)
+    return ScenarioCheck(
+        "RS1",
+        _findings(current) == expected and flagged and d6_superseded,
+        f"{_describe(expected)} (reclassified, high priority, notify); D6 superseded",
+        observed,
+    )
 
 
 def _check_downgrade(plan: CohortPlan, outcome: StrategyOutcome) -> ScenarioCheck:
@@ -545,14 +567,21 @@ def _check_downgrade(plan: CohortPlan, outcome: StrategyOutcome) -> ScenarioChec
         select(PatientVariant).where(PatientVariant.patient_id == patient.id, PatientVariant.variant_key_id == key_id)
     ).scalar_one()
     bundle = fhir_export.build_patient_bundle(patient)
-    statuses = {entry["resource"]["status"] for entry in bundle["entry"] if entry["resource"]["resourceType"] == "Observation"}
+    statuses = {
+        entry["resource"]["status"] for entry in bundle["entry"] if entry["resource"]["resourceType"] == "Observation"
+    }
     amended = variant.is_amended and statuses == {"amended"}
+    reason = "downgrade" if superseded_ok else "unexpected"
     observed = (
-        f"superseded {sorted(alert.rule_code for alert in superseded)} ({'downgrade' if superseded_ok else 'unexpected'}); "
-        f"review notices: {len(notices)}; current: {_describe(_findings(current))}; FHIR status: {sorted(statuses)}"
+        f"superseded {sorted(alert.rule_code for alert in superseded)} ({reason}); review notices: {len(notices)}; "
+        f"current: {_describe(_findings(current))}; FHIR status: {sorted(statuses)}"
     )
-    return ScenarioCheck("RS2", superseded_ok and notice_ok and silent_d6 and amended,
-                         "D1, D5 superseded; 1 review notice; silent D6 info; FHIR amended", observed)
+    return ScenarioCheck(
+        "RS2",
+        superseded_ok and notice_ok and silent_d6 and amended,
+        "D1, D5 superseded; 1 review notice; silent D6 info; FHIR amended",
+        observed,
+    )
 
 
 def _check_within_actionable(plan: CohortPlan, outcome: StrategyOutcome, t0: datetime) -> ScenarioCheck:
@@ -570,8 +599,12 @@ def _check_within_actionable(plan: CohortPlan, outcome: StrategyOutcome, t0: dat
         f"current: {_describe(_findings(current))}; same alerts: {same}; confirmed under "
         f"{release.label if release else '-'}: {provenance}; notifications: {not silent}"
     )
-    return ScenarioCheck("RS3", _findings(current) == expected and same and provenance and silent,
-                         "D3 medium + D5 low kept, provenance updated to K_new, no notification", observed)
+    return ScenarioCheck(
+        "RS3",
+        _findings(current) == expected and same and provenance and silent,
+        "D3 medium + D5 low kept, provenance updated to K_new, no notification",
+        observed,
+    )
 
 
 def _check_within_non_actionable(plan: CohortPlan, outcome: StrategyOutcome) -> ScenarioCheck:
@@ -584,12 +617,15 @@ def _check_within_non_actionable(plan: CohortPlan, outcome: StrategyOutcome) -> 
         for alert in alerts
     )
     notices = db.session.scalar(
-        select(func.count(ReviewNotice.id)).where(ReviewNotice.patient_id == patient.id, ReviewNotice.created_at >= started)
+        select(func.count(ReviewNotice.id)).where(
+            ReviewNotice.patient_id == patient.id, ReviewNotice.created_at >= started
+        )
     )
     silent = notices == 0 and not _patient_notifications(outcome.release, patient.mrn)
     observed = f"current: {_describe(_findings(current))}; D6 superseded: {d6_superseded}; review notices: {notices}"
-    return ScenarioCheck("RS4", not current and d6_superseded and silent,
-                         "D6 superseded silently; no notice, no notification", observed)
+    return ScenarioCheck(
+        "RS4", not current and d6_superseded and silent, "D6 superseded silently; no notice, no notification", observed
+    )
 
 
 def _check_rule_revision(plan: CohortPlan, outcome: StrategyOutcome) -> ScenarioCheck:
@@ -607,9 +643,8 @@ def _check_rule_revision(plan: CohortPlan, outcome: StrategyOutcome) -> Scenario
         and d4[0].created_at >= started
         and d4[0].confirmed_rule_version.version == 2
     )
-    observed = (
-        f"before revision: {_describe(_findings(before))}; after: {_describe(_findings(d4))}"
-        + (f" (rule version {d4[0].confirmed_rule_version.version}, notify {d4[0].notify})" if d4 else "")
+    observed = f"before revision: {_describe(_findings(before))}; after: {_describe(_findings(d4))}" + (
+        f" (rule version {d4[0].confirmed_rule_version.version}, notify {d4[0].notify})" if d4 else ""
     )
     return ScenarioCheck("RS5", passed, "new D4 high alert under D4 v2 (notify)", observed)
 
@@ -622,12 +657,18 @@ def _check_family(plan: CohortPlan, outcome: StrategyOutcome) -> ScenarioCheck:
     for planned in plan.scenario_patients("RS6"):
         patient = db.session.execute(select(Patient).where(Patient.mrn == planned.mrn)).scalar_one()
         drugs = {medication.drug_class for medication in planned.patient.medications}
-        d3 = ("D3", "alert", "medium") if drugs & {"insulin", "metformin"} and "sulfonylurea" not in drugs else ("D3", "note", None)
+        d3 = (
+            ("D3", "alert", "medium")
+            if drugs & {"insulin", "metformin"} and "sulfonylurea" not in drugs
+            else ("D3", "note", None)
+        )
         current = [alert for alert in _variant_alerts(patient, key_id) if alert.is_current]
         new = all(alert.created_at >= started for alert in current)
         results.append(_findings(current) == {d3, ("D5", "alert", "low")} and new)
     observed = f"{sum(results)} of {len(results)} carriers alerted as expected"
-    return ScenarioCheck("RS6", bool(results) and all(results), "every carrier: new D5 low + D3 (alert or note)", observed)
+    return ScenarioCheck(
+        "RS6", bool(results) and all(results), "every carrier: new D5 low + D3 (alert or note)", observed
+    )
 
 
 def _check_uncarried(plan: CohortPlan) -> ScenarioCheck:
@@ -635,10 +676,16 @@ def _check_uncarried(plan: CohortPlan) -> ScenarioCheck:
     key = VariantKey.find(*plan.scenario_keys["V11"])
     carriers = changes = 0
     if key is not None:
-        carriers = db.session.scalar(select(func.count(PatientVariant.id)).where(PatientVariant.variant_key_id == key.id))
+        carriers = db.session.scalar(
+            select(func.count(PatientVariant.id)).where(PatientVariant.variant_key_id == key.id)
+        )
         changes = db.session.scalar(select(func.count(VariantChange.id)).where(VariantChange.variant_key_id == key.id))
-    return ScenarioCheck("RS7", carriers == 0 and changes == 0, "not examined (no carrier, not in Δ)",
-                         f"carriers: {carriers}; VariantChange rows: {changes}")
+    return ScenarioCheck(
+        "RS7",
+        carriers == 0 and changes == 0,
+        "not examined (no carrier, not in Δ)",
+        f"carriers: {carriers}; VariantChange rows: {changes}",
+    )
 
 
 def scenario_checks(

@@ -1,0 +1,43 @@
+{#- Uploads table (included by the patient page and the upload page); expects ``uploads``, newest first,
+    and ``compact`` (true in narrow columns: no uploader column). -#}
+{% import "_macros.html" as ui %}
+<div class="table-responsive">
+  <table class="table table-app align-middle uploads-table">
+    <thead>
+      <tr>
+        <th scope="col" class="d-none d-sm-table-cell">Uploaded</th>
+        <th scope="col">File</th>
+        <th scope="col" class="text-end text-sm-start">Status</th>
+        {% if not compact %}<th scope="col" class="d-none d-lg-table-cell">Uploaded by</th>{% endif %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for upload in uploads %}
+      <tr class="{{ 'upload-rejected' if upload.status == 'rejected' else '' }}">
+        <td class="d-none d-sm-table-cell text-nowrap">{{ upload.uploaded_at|dt }}</td>
+        <td class="upload-file">
+          <div class="fw-semibold text-break">{{ upload.filename }}</div>
+          <div class="upload-meta">
+            <span class="d-sm-none">{{ upload.uploaded_at|dt }} ·</span>
+            {{ upload.size_bytes|filesize }}{% if upload.sample_id %} · sample <span class="font-monospace">{{ upload.sample_id }}</span>{% endif %}
+            · <span class="font-monospace" title="SHA-256 {{ upload.sha256 }}">{{ upload.sha256[:10] }}…</span>
+          </div>
+          {% if upload.status == "accepted" %}
+          <ul class="upload-counters" aria-label="Record counts">
+            <li><strong>{{ upload.panel_variants|number }}</strong> panel variant{{ "" if upload.panel_variants == 1 else "s" }}</li>
+            <li>{{ upload.total_records|number }} record{{ "" if upload.total_records == 1 else "s" }}</li>
+            <li>{{ upload.off_panel_skipped|number }} off-panel</li>
+            {% if upload.non_pass_skipped %}<li>{{ upload.non_pass_skipped|number }} non-PASS</li>{% endif %}
+            {% if upload.ref_calls_skipped %}<li>{{ upload.ref_calls_skipped|number }} reference call{{ "" if upload.ref_calls_skipped == 1 else "s" }}</li>{% endif %}
+          </ul>
+          {% elif upload.error %}
+          <div class="upload-error"><i class="bi bi-exclamation-octagon" aria-hidden="true"></i><span>{{ upload.error }}</span></div>
+          {% endif %}
+        </td>
+        <td class="text-end text-sm-start">{{ ui.status_badge(upload.status) }}</td>
+        {% if not compact %}<td class="d-none d-lg-table-cell">{{ upload.uploaded_by.full_name if upload.uploaded_by else "—" }}</td>{% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

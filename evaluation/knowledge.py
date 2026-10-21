@@ -241,8 +241,7 @@ def release_summary(records: Sequence[ClinVarRecord]) -> dict[str, Any]:
         "raw_significance": dict(sorted(Counter(record.clnsig or "missing" for record in records).items())),
         "expert_panel_records": sum(record.is_expert_panel for record in known.values()),
         "expert_panel_by_gene": {
-            gene: sum(record.is_expert_panel and record.gene == gene for record in known.values())
-            for gene in C.GENES
+            gene: sum(record.is_expert_panel and record.gene == gene for record in known.values()) for gene in C.GENES
         },
         "katp_mechanisms": {mechanism: mechanisms.get(mechanism, 0) for mechanism in C.MECHANISMS},
     }
@@ -426,34 +425,100 @@ class ChangeKind:
 CHANGE_KINDS: dict[str, ChangeKind] = {
     kind.name: kind
     for kind in (
-        ChangeKind("vus_to_lp", "VUS → LP", "upgrade", frozenset({"VUS"}), "Likely_pathogenic",
-                   "VUS reclassified as likely pathogenic"),
-        ChangeKind("vus_to_p", "VUS → P", "upgrade", frozenset({"VUS"}), "Pathogenic",
-                   "VUS reclassified as pathogenic"),
-        ChangeKind("nc_to_lp", "NC → LP (new record)", "upgrade", frozenset({"NC"}), "Likely_pathogenic",
-                   "variant absent from the base release newly submitted as likely pathogenic"),
-        ChangeKind("lp_to_vus", "LP → VUS", "downgrade", frozenset({"LP"}), "Uncertain_significance",
-                   "likely pathogenic variant downgraded to uncertain significance"),
-        ChangeKind("p_to_vus", "P → VUS (conflicting)", "downgrade", frozenset({"P"}),
-                   "Conflicting_classifications_of_pathogenicity",
-                   "pathogenic variant now has conflicting classifications (normalised to VUS)"),
-        ChangeKind("p_removed", "P → removed", "downgrade", frozenset({"P"}), None,
-                   "pathogenic record withdrawn from ClinVar (key becomes not classified)"),
-        ChangeKind("lp_to_p", "LP → P", "within_actionable", frozenset({"LP"}), "Pathogenic",
-                   "likely pathogenic variant upgraded to pathogenic"),
-        ChangeKind("p_to_lp", "P → LP", "within_actionable", frozenset({"P"}), "Likely_pathogenic",
-                   "pathogenic variant changed to likely pathogenic"),
-        ChangeKind("katp_activating", "KATP P/LP: mechanism → activating", "within_actionable",
-                   frozenset({"P", "LP"}), "", "KCNJ11/ABCC8 condition updated to permanent neonatal diabetes "
-                   "(class unchanged; mechanism becomes activating)", KATP_GENES),
-        ChangeKind("vus_to_lb", "VUS → LB", "within_non_actionable", frozenset({"VUS"}), "Likely_benign",
-                   "VUS reclassified as likely benign"),
-        ChangeKind("lb_to_b", "LB → B", "within_non_actionable", frozenset({"LB"}), "Benign",
-                   "likely benign variant reclassified as benign"),
-        ChangeKind("vus_to_conflicting", "VUS → Conflicting", "within_non_actionable", frozenset({"VUS"}),
-                   "Conflicting_classifications_of_pathogenicity",
-                   "VUS now has conflicting classifications: a raw CLNSIG change that GE-EHR normalises to "
-                   "VUS in both releases, so it is not a classification change"),
+        ChangeKind(
+            "vus_to_lp",
+            "VUS → LP",
+            "upgrade",
+            frozenset({"VUS"}),
+            "Likely_pathogenic",
+            "VUS reclassified as likely pathogenic",
+        ),
+        ChangeKind(
+            "vus_to_p", "VUS → P", "upgrade", frozenset({"VUS"}), "Pathogenic", "VUS reclassified as pathogenic"
+        ),
+        ChangeKind(
+            "nc_to_lp",
+            "NC → LP (new record)",
+            "upgrade",
+            frozenset({"NC"}),
+            "Likely_pathogenic",
+            "variant absent from the base release newly submitted as likely pathogenic",
+        ),
+        ChangeKind(
+            "lp_to_vus",
+            "LP → VUS",
+            "downgrade",
+            frozenset({"LP"}),
+            "Uncertain_significance",
+            "likely pathogenic variant downgraded to uncertain significance",
+        ),
+        ChangeKind(
+            "p_to_vus",
+            "P → VUS (conflicting)",
+            "downgrade",
+            frozenset({"P"}),
+            "Conflicting_classifications_of_pathogenicity",
+            "pathogenic variant now has conflicting classifications (normalised to VUS)",
+        ),
+        ChangeKind(
+            "p_removed",
+            "P → removed",
+            "downgrade",
+            frozenset({"P"}),
+            None,
+            "pathogenic record withdrawn from ClinVar (key becomes not classified)",
+        ),
+        ChangeKind(
+            "lp_to_p",
+            "LP → P",
+            "within_actionable",
+            frozenset({"LP"}),
+            "Pathogenic",
+            "likely pathogenic variant upgraded to pathogenic",
+        ),
+        ChangeKind(
+            "p_to_lp",
+            "P → LP",
+            "within_actionable",
+            frozenset({"P"}),
+            "Likely_pathogenic",
+            "pathogenic variant changed to likely pathogenic",
+        ),
+        ChangeKind(
+            "katp_activating",
+            "KATP P/LP: mechanism → activating",
+            "within_actionable",
+            frozenset({"P", "LP"}),
+            "",
+            "KCNJ11/ABCC8 condition updated to permanent neonatal diabetes "
+            "(class unchanged; mechanism becomes activating)",
+            KATP_GENES,
+        ),
+        ChangeKind(
+            "vus_to_lb",
+            "VUS → LB",
+            "within_non_actionable",
+            frozenset({"VUS"}),
+            "Likely_benign",
+            "VUS reclassified as likely benign",
+        ),
+        ChangeKind(
+            "lb_to_b",
+            "LB → B",
+            "within_non_actionable",
+            frozenset({"LB"}),
+            "Benign",
+            "likely benign variant reclassified as benign",
+        ),
+        ChangeKind(
+            "vus_to_conflicting",
+            "VUS → Conflicting",
+            "within_non_actionable",
+            frozenset({"VUS"}),
+            "Conflicting_classifications_of_pathogenicity",
+            "VUS now has conflicting classifications: a raw CLNSIG change that GE-EHR normalises to "
+            "VUS in both releases, so it is not a classification change",
+        ),
     )
 }
 ADDED_KIND = "added"
@@ -587,8 +652,10 @@ def _injected(
 
 
 def _check_spec(spec: ChangeSetSpec, by_key: Mapping[Key, ClinVarRecord]) -> None:
-    unknown = sorted({kind for kind in spec.forced.values() if kind not in CHANGE_KINDS} |
-                     {kind for kind in spec.uncarried if kind not in CHANGE_KINDS})
+    unknown = sorted(
+        {kind for kind in spec.forced.values() if kind not in CHANGE_KINDS}
+        | {kind for kind in spec.uncarried if kind not in CHANGE_KINDS}
+    )
     if unknown:
         raise ValueError(f"Unknown change kind(s) {', '.join(unknown)}; expected one of {', '.join(CHANGE_KINDS)}.")
     negative = sorted(kind for kind, count in spec.uncarried.items() if count < 0)
@@ -601,7 +668,11 @@ def _check_spec(spec: ChangeSetSpec, by_key: Mapping[Key, ClinVarRecord]) -> Non
         if gene is None:
             raise ValueError(f"Forced change {kind} on {key_label(key)}: the key is outside the gene panel.")
         if not is_eligible(kind, record, gene):
-            state = "absent from the base release" if record is None else f"classified {normalise_record(record).classification}"
+            state = (
+                "absent from the base release"
+                if record is None
+                else f"classified {normalise_record(record).classification}"
+            )
             raise ValueError(
                 f"Forced change {kind} ({CHANGE_KINDS[kind].label}) cannot be applied to {key_label(key)} ({gene}): "
                 f"the key is {state}."
@@ -671,7 +742,9 @@ def apply_change_set(
         candidates = [
             record
             for key, record in by_key.items()
-            if key not in spec.carried_keys and key not in spec.forced and key not in replaced
+            if key not in spec.carried_keys
+            and key not in spec.forced
+            and key not in replaced
             and is_eligible(kind, record)
         ]
         if len(candidates) < count:
@@ -778,7 +851,9 @@ def load_real_pair(directory: str | os.PathLike[str], *, allow_synthetic: bool =
             )
         file_date = parse_file_date(meta["fileDate"])
         if file_date is None:
-            raise ValueError(f"{path.name} has no valid ##fileDate header line; fetch it again with scripts/fetch_clinvar.py.")
+            raise ValueError(
+                f"{path.name} has no valid ##fileDate header line; fetch it again with scripts/fetch_clinvar.py."
+            )
         dated.append((file_date, path))
     if len(dated) < 2:
         return None
