@@ -560,7 +560,7 @@ def test_upload_rejected_file_is_recorded(lab_client: FlaskClient, db: SQLAlchem
     response = upload(lab_client, clinic.plain, bad, "bad.vcf")
     assert response.status_code == 400
     body = text(response)
-    assert "The file was rejected." in body and "Line 14" in body and "POS must be a positive whole number" in body
+    assert "The file was rejected." in body and "Line 13" in body and "POS must be a positive whole number" in body
     rejected = db.session.scalar(select(GenomicUpload).where(GenomicUpload.patient_id == clinic.plain.id))
     assert rejected.status == "rejected" and "POS" in rejected.error
     assert not clinic.plain.variants

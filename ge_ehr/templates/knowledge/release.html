@@ -34,13 +34,13 @@
         <span class="small text-body-secondary">Expert-panel classifications take precedence</span>
       </div>
       <div class="table-responsive">
-        <table class="table table-app align-middle count-table">
+        <table class="table table-app align-middle count-table kb-table">
           <thead>
             <tr>
               <th scope="col">Gene</th>
               {% for cls in C.CLASSES %}<th scope="col" class="text-end">{{ ui.class_badge(cls) }}</th>{% endfor %}
               <th scope="col" class="text-end">Total</th>
-              <th scope="col" class="d-none d-md-table-cell col-mix">Mix</th>
+              <th scope="col" class="d-none d-md-table-cell col-mix text-start">Mix</th>
             </tr>
           </thead>
           <tbody>
@@ -73,14 +73,13 @@
       <div class="card-header"><h2 class="card-heading" id="activations-title"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Activation history</h2></div>
       {% if detail.activations %}
       <div class="table-responsive">
-        <table class="table table-app align-middle">
-          <thead><tr><th scope="col">Run</th><th scope="col">Previous release</th><th scope="col" class="d-none d-md-table-cell">Strategy</th><th scope="col" class="text-end">Changed</th><th scope="col" class="text-end d-none d-sm-table-cell">Notifications</th><th scope="col">Status</th></tr></thead>
+        <table class="table table-app align-middle kb-table">
+          <thead><tr><th scope="col">Run</th><th scope="col">Previous release</th><th scope="col" class="text-end">Changed</th><th scope="col" class="text-end d-none d-sm-table-cell">Notified</th><th scope="col">Status</th></tr></thead>
           <tbody>
             {% for run in detail.activations %}
             <tr>
-              <td>{{ kb.run_link(run) }}<div class="small text-body-secondary text-nowrap">{{ run.started_at|dt }}</div></td>
+              <td>{{ kb.run_link(run) }}<div class="small text-body-secondary text-nowrap">{{ run.started_at|dt }}</div><div class="small text-body-secondary">{{ run.strategy|strategy_label }}</div></td>
               <td>{{ kb.release_link(run.old_release, empty="None (initial classification)") }}</td>
-              <td class="d-none d-md-table-cell">{{ run.strategy|strategy_label }}</td>
               {{ kb.count_cell(run.changed_variants) }}
               {{ kb.count_cell(run.notifications, class_="d-none d-sm-table-cell") }}
               <td>{{ ui.status_badge(run.status) }}</td>

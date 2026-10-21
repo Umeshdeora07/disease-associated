@@ -31,7 +31,6 @@
           <th scope="col" class="d-none d-md-table-cell">Release date</th>
           <th scope="col" class="text-end">Records</th>
           <th scope="col" class="d-none d-lg-table-cell col-mix">Classes</th>
-          <th scope="col" class="d-none d-xl-table-cell">Genes</th>
           <th scope="col" class="d-none d-md-table-cell">Imported</th>
           <th scope="col" class="d-none d-sm-table-cell">Activated</th>
         </tr>
@@ -46,6 +45,14 @@
             <div class="badge-row">{{ kb.release_badges(release) }}</div>
             <div class="small text-body-secondary file-name" title="Source file">{{ release.file_name or "—" }}</div>
             <div class="small text-body-secondary d-md-none">Released {{ release.release_date|date }}</div>
+            {% if release.record_count %}
+            <details class="gene-details">
+              <summary>Records per gene</summary>
+              <ul class="gene-count-list">
+                {% for gene in C.GENES %}<li>{{ ui.gene(gene) }}<span class="num">{{ release.gene_counts.get(gene, 0)|number }}</span></li>{% endfor %}
+              </ul>
+            </details>
+            {% endif %}
           </td>
           <td class="d-none d-md-table-cell text-nowrap">{{ release.release_date|date }}</td>
           <td class="text-end num">{{ release.record_count|number }}</td>
@@ -55,16 +62,6 @@
               {%- for cls in C.CLASSES if release.class_counts.get(cls) %}<span><span class="mix-dot mix-dot-{{ cls|lower }}" aria-hidden="true"></span>{{ cls }} {{ release.class_counts[cls]|number }}</span>{% endfor -%}
             </div>
           </td>
-          <td class="d-none d-xl-table-cell">
-            {% if release.record_count %}
-            <details class="gene-details">
-              <summary>{{ release.gene_counts.values()|select|list|length }} of {{ C.GENES|length }} genes</summary>
-              <ul class="gene-count-list">
-                {% for gene in C.GENES %}<li>{{ ui.gene(gene) }}<span class="num">{{ release.gene_counts.get(gene, 0)|number }}</span></li>{% endfor %}
-              </ul>
-            </details>
-            {% else %}<span class="text-body-secondary">—</span>{% endif %}
-          </td>
           <td class="d-none d-md-table-cell">
             <div class="text-nowrap">{{ release.imported_at|dt }}</div>
             <div class="small text-body-secondary">{{ release.imported_by.full_name if release.imported_by else "System" }}</div>
@@ -72,9 +69,10 @@
           <td class="d-none d-sm-table-cell">
             {% if release.activated_at %}
             <div class="text-nowrap">{{ release.activated_at|dt }}</div>
-            <div class="small text-body-secondary">
-              {%- if activation %}{{ activation.initiated_by.full_name if activation.initiated_by else "System" }} · {{ kb.run_link(activation) }}{% else %}—{% endif -%}
-            </div>
+            {% if activation %}
+            <div class="small text-body-secondary">{{ activation.initiated_by.full_name if activation.initiated_by else "System" }}</div>
+            <div class="small">{{ kb.run_link(activation) }}</div>
+            {% endif %}
             {% else %}
             <span class="text-body-secondary">Not activated</span>
             {% endif %}
@@ -82,7 +80,7 @@
         </tr>
         {% else %}
         <tr>
-          <td colspan="8">
+          <td colspan="7">
             {% if is_admin %}
             {% call ui.empty_state("layers", "No knowledge-base release yet", "Import a ClinVar GRCh38 VCF (or the synthetic demo release) to start classifying patient variants. Until a release is active, every variant is “not classified”.") %}
               <a class="btn btn-primary" href="{{ url_for('knowledge.import_release') }}"><i class="bi bi-upload" aria-hidden="true"></i> Import release</a>
