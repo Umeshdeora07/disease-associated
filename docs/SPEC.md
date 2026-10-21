@@ -54,19 +54,18 @@ consistent with this document and the paper, and document the decision in a code
 | **UI-B** | `main/`, `knowledge/` blueprints + `templates/main/*`, `templates/knowledge/*`, audit-page polish, their route tests; may append a delimited CSS section. |
 | **Eval** | `evaluation/knowledge.py`, `evaluation/strategies.py`, `evaluation/metrics.py`, `evaluation/run.py`, `evaluation/results/*`, `docs/EVALUATION.md`, their tests. |
 | **Scenario** | `ge_ehr/demo.py`, `commands/demo_cmds.py`, `tests/test_scenarios.py`. |
-| **Docs/Deploy** | `README.md`, `docs/ARCHITECTURE.md`, `docs/USER_GUIDE.md`, `docs/DEPLOYMENT.md`, `render.yaml`, `Dockerfile`, `Procfile`, `migrations/`. |
+| **Docs** | `README.md`, `docs/ARCHITECTURE.md`, `docs/USER_GUIDE.md` (local installation and use only — the client decided the system runs locally, no online hosting). |
 
 ---
 
 ## 1. Repository layout
 
 ```
-README.md                      project overview, quick start            (Docs WP)
+README.md                      project overview, local quick start      (Docs WP)
 requirements.txt               pinned runtime + dev deps                (Foundation)
 pyproject.toml                 metadata + pytest config (markers: slow) (Foundation)
 .env.example                   SECRET_KEY, DATABASE_URL, ...            (Foundation)
 wsgi.py                        app = create_app()                       (Foundation)
-render.yaml, Dockerfile, Procfile                                      (Docs/Deploy WP)
 ge_ehr/
   __init__.py                  create_app, blueprints, error handlers, security headers
   config.py                    Config / DevelopmentConfig / TestingConfig / ProductionConfig
@@ -103,7 +102,7 @@ data/
 evaluation/                    evaluation harness (§10)                      (Cohort WP + Eval WP)
 scripts/                       fetch_clinvar.py, build_demo_releases.py, run_synthea.sh, ...
 tests/                         pytest suite
-docs/                          SPEC.md (this), ARCHITECTURE.md, USER_GUIDE.md, DEPLOYMENT.md, EVALUATION.md
+docs/                          SPEC.md (this), ARCHITECTURE.md, USER_GUIDE.md, EVALUATION.md, FHIR.md
 ```
 
 ---
