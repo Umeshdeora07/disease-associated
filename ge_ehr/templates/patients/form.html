@@ -20,6 +20,13 @@
     <form class="card" method="post" novalidate aria-label="{{ 'Edit patient' if editing else 'New patient' }}">
       <div class="card-body">
         {{ form.hidden_tag() }}
+        {% set invalid_fields = form.errors|reject("in", ["", "csrf_token"])|list %}
+        {% if invalid_fields %}
+        <div class="alert alert-danger" role="alert">
+          <i class="bi bi-x-octagon-fill" aria-hidden="true"></i>
+          <div class="alert-body">The patient was not saved. Correct the {{ "highlighted field" if invalid_fields|length == 1 else invalid_fields|length ~ " highlighted fields" }} below.</div>
+        </div>
+        {% endif %}
         {{ ui.render_form_errors(form) }}
         <fieldset class="form-section">
           <legend class="form-section-title"><i class="bi bi-person-vcard" aria-hidden="true"></i> Demographics</legend>

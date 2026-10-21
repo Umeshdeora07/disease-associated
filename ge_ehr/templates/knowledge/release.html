@@ -73,16 +73,15 @@
       <div class="card-header"><h2 class="card-heading" id="activations-title"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Activation history</h2></div>
       {% if detail.activations %}
       <div class="table-responsive">
-        <table class="table table-app align-middle kb-table">
-          <thead><tr><th scope="col">Run</th><th scope="col">Previous release</th><th scope="col" class="text-end">Changed</th><th scope="col" class="text-end d-none d-sm-table-cell">Notified</th><th scope="col">Status</th></tr></thead>
+        <table class="table table-app align-middle kb-table kb-stack-xs">
+          <thead><tr><th scope="col">Run</th><th scope="col">Previous release</th><th scope="col" class="text-end">Changed</th><th scope="col" class="text-end">Notified</th></tr></thead>
           <tbody>
             {% for run in detail.activations %}
             <tr>
-              <td>{{ kb.run_link(run) }}<div class="small text-body-secondary text-nowrap">{{ run.started_at|dt }}</div><div class="small text-body-secondary">{{ run.strategy|strategy_label }}</div></td>
-              <td>{{ kb.release_link(run.old_release, empty="None (initial classification)") }}</td>
-              {{ kb.count_cell(run.changed_variants) }}
-              {{ kb.count_cell(run.notifications, class_="d-none d-sm-table-cell") }}
-              <td>{{ ui.status_badge(run.status) }}</td>
+              <td><div class="run-cell-head">{{ kb.run_link(run) }}{{ ui.status_badge(run.status) }}</div><div class="small text-body-secondary text-nowrap">{{ run.started_at|dt }}</div><div class="small text-body-secondary">{{ run.strategy|strategy_label }}</div></td>
+              <td><span class="xs-label">Previous</span>{{ kb.release_link(run.old_release, empty="None (initial classification)") }}</td>
+              <td class="text-end num"><span class="xs-label">Changed</span>{{ run.changed_variants|number }}</td>
+              <td class="text-end num"><span class="xs-label">Notified</span>{{ run.notifications|number }}</td>
             </tr>
             {% endfor %}
           </tbody>

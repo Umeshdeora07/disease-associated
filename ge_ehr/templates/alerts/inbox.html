@@ -9,57 +9,52 @@
 {% endcall %}
 
 <div class="row g-3 inbox-stats">
-  <div class="col-6 col-lg-3">{{ ui.stat_card("Awaiting review", summary.awaiting_review|number, "hourglass-split", href=url_for('alerts.inbox', status='active'), tone="warning", hint="Active current alerts") }}</div>
+  <div class="col-6 col-lg-3">{{ ui.stat_card("Awaiting review", summary.awaiting_review|number, "hourglass-split", href=url_for('alerts.inbox', status='active'), tone="warning", hint="Active, not yet reviewed") }}</div>
   <div class="col-6 col-lg-3">{{ ui.stat_card("High priority", summary.high_priority|number, "flag", tone="danger", hint="Raised by a reclassification") }}</div>
-  <div class="col-6 col-lg-3">{{ ui.stat_card("Reclassified", summary.reclassified|number, "arrow-repeat", href=url_for('alerts.inbox', reclassified=1), tone="purple", hint="Current alerts after a new release") }}</div>
+  <div class="col-6 col-lg-3">{{ ui.stat_card("Reclassified", summary.reclassified|number, "arrow-repeat", href=url_for('alerts.inbox', reclassified=1), tone="purple", hint="After a new release") }}</div>
   <div class="col-6 col-lg-3">{{ ui.stat_card("Open review notices", summary.open_notices|number, "clipboard2-pulse", href=url_for('alerts.notices'), tone="primary", hint="Superseded alerts to review") }}</div>
 </div>
 
-<nav class="severity-tabs" aria-label="Filter current alerts by severity">
+<nav class="severity-tabs" aria-label="Filter by severity">
   <a class="severity-tab{% if not filters.severity %} is-active{% endif %}" href="{{ url_for('alerts.inbox', **filters.args_with(severity='')) }}"{% if not filters.severity %} aria-current="true"{% endif %}>All severities</a>
   {% for severity in C.SEVERITIES %}
   <a class="severity-tab severity-tab-{{ severity }}{% if filters.severity == severity %} is-active{% endif %}" href="{{ url_for('alerts.inbox', **filters.args_with(severity=severity)) }}"{% if filters.severity == severity %} aria-current="true"{% endif %}>
     <span class="severity-dot" aria-hidden="true"></span>{{ severity|severity_label }}
-    <span class="severity-tab-count" title="Current alerts">{{ summary.by_severity[severity] }}</span></a>
+    <span class="severity-tab-count" title="Current alerts of this severity">{{ summary.by_severity[severity] }}</span></a>
   {% endfor %}
 </nav>
 
 <form class="card filter-bar" method="get" action="{{ url_for('alerts.inbox') }}" role="search" aria-label="Filter alerts">
   <div class="card-body">
     <div class="row g-2 align-items-end">
-      <div class="col-6 col-md-3 col-lg-2">
-        <label class="form-label" for="filter-severity">Severity</label>
-        <select class="form-select" id="filter-severity" name="severity" data-autosubmit>
-          <option value="">All</option>
-          {% for severity in C.SEVERITIES %}<option value="{{ severity }}"{% if severity == filters.severity %} selected{% endif %}>{{ severity|severity_label }}</option>{% endfor %}
-        </select>
-      </div>
-      <div class="col-6 col-md-3 col-lg-3">
+      {% if filters.severity %}<input type="hidden" name="severity" value="{{ filters.severity }}">{% endif %}
+      <div class="col-6 col-md-3">
         <label class="form-label" for="filter-status">Status</label>
-        <select class="form-select" id="filter-status" name="status" data-autosubmit>
+        <select class="form-select" id="filter-status" name="status" aria-describedby="filter-status-help" data-autosubmit>
           {% for value, label in statuses.items() %}<option value="{{ value }}"{% if value == filters.status %} selected{% endif %}>{{ label }}</option>{% endfor %}
         </select>
+        <div class="visually-hidden" id="filter-status-help">Current means active or reviewed. Superseded alerts are kept for the record.</div>
       </div>
-      <div class="col-6 col-md-2 col-lg-2">
+      <div class="col-6 col-md-3 col-lg-2">
         <label class="form-label" for="filter-rule">Rule</label>
         <select class="form-select" id="filter-rule" name="rule" data-autosubmit>
           <option value="">All rules</option>
           {% for code in rule_codes %}<option value="{{ code }}"{% if code == filters.rule %} selected{% endif %}>{{ code }}</option>{% endfor %}
         </select>
       </div>
-      <div class="col-6 col-md-4 col-lg-2">
+      <div class="col-6 col-md-3">
         <label class="form-label" for="filter-kind">Show</label>
         <select class="form-select" id="filter-kind" name="kind" data-autosubmit>
           {% for value, label in kinds.items() %}<option value="{{ value }}"{% if value == filters.kind %} selected{% endif %}>{{ label }}</option>{% endfor %}
         </select>
       </div>
-      <div class="col-12 col-md-6 col-lg-1">
+      <div class="col-6 col-md-3 col-lg-2">
         <div class="form-check filter-toggle">
           <input class="form-check-input" type="checkbox" id="filter-reclassified" name="reclassified" value="1"{% if filters.reclassified %} checked{% endif %} data-autosubmit>
-          <label class="form-check-label" for="filter-reclassified">Reclassified</label>
+          <label class="form-check-label" for="filter-reclassified">Reclassified only</label>
         </div>
       </div>
-      <div class="col-12 col-md-6 col-lg-2 d-flex gap-2 justify-content-lg-end">
+      <div class="col-12 col-lg-2 d-flex gap-2 justify-content-end">
         <button type="submit" class="btn btn-primary"><i class="bi bi-funnel" aria-hidden="true"></i> Apply</button>
         {% if not filters.is_default %}<a class="btn btn-outline-secondary" href="{{ url_for('alerts.inbox') }}">Reset</a>{% endif %}
       </div>

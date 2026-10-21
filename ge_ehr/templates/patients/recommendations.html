@@ -197,7 +197,7 @@
           </td>
           <td class="d-none d-md-table-cell">
             <span class="gene-symbol">{{ alert.variant_key.gene or "—" }}</span> <code class="variant-key">{{ alert.variant_key.label }}</code>
-            <div class="small text-body-secondary">Raised as {{ ui.class_badge(alert.classification) }}{% if alert.created_release %} under {{ alert.created_release.label }}{% endif %}</div>
+            <div class="small text-body-secondary">Raised as {{ ui.class_badge(alert.classification) }}{% if alert.created_release %} under {{ pm.release_short(alert.created_release) }}{% endif %}</div>
           </td>
           <td class="d-none d-lg-table-cell text-nowrap">{{ alert.created_at|dt }}<div class="small text-body-secondary">{{ alert.trigger|trigger_label }}</div></td>
           <td>

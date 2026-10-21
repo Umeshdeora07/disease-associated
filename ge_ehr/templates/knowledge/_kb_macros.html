@@ -1,6 +1,8 @@
 {#- Macros of the knowledge pages (UI-B). Use with: {% import "knowledge/_kb_macros.html" as kb %}
     category_badge, class_change, mechanism_change, release_badges, release_link, run_link,
-    trigger_label, rule_changes, class_mix, count_cell -#}
+    trigger_label, rule_changes, class_mix, count_cell.
+    class_mix needs the knowledge blueprint's ``proportion_segments`` helper: use it only in
+    knowledge pages, imported ``with context``. -#}
 {% import "_macros.html" as ui %}
 
 {% macro category_badge(category) -%}

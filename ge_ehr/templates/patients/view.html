@@ -125,7 +125,7 @@
         </dl>
         {% if show_alerts %}
         <div class="collapse inline-editor{% if diagnosis_form_open %} show{% endif %}" id="diagnosis-editor">
-          <form method="post" action="{{ url_for('patients.update_diagnosis', patient_id=patient.id) }}" novalidate aria-label="Edit diagnosis">
+          <form method="post" action="{{ url_for('patients.update_diagnosis', patient_id=patient.id, _anchor='diagnosis') }}" novalidate aria-label="Edit diagnosis">
             {{ diagnosis_form.hidden_tag() }}
             {{ ui.render_form_errors(diagnosis_form) }}
             {{ ui.render_field(diagnosis_form.diabetes_type) }}
@@ -194,7 +194,7 @@
       <div class="card-body pt-2">
         {% if show_alerts %}
         <div class="collapse inline-editor{% if medication_form_open %} show{% endif %}" id="medication-editor">
-          <form method="post" action="{{ url_for('patients.add_medication', patient_id=patient.id) }}" novalidate aria-label="Add medication">
+          <form method="post" action="{{ url_for('patients.add_medication', patient_id=patient.id, _anchor='medications') }}" novalidate aria-label="Add medication">
             {{ medication_form.hidden_tag() }}
             {{ ui.render_form_errors(medication_form) }}
             <div class="row g-3">
@@ -242,7 +242,7 @@
     </div>
     {% if profile.variants %}
     <div class="profile-counts">
-      <span class="count-pill count-pill-actionable">{{ profile.actionable_count }}</span> actionable
+      <span class="count-pill {{ 'count-pill-actionable' if profile.actionable_count else 'count-pill-zero' }}">{{ profile.actionable_count }}</span> actionable
       <span class="text-body-secondary">of {{ profile.variants|length }} panel variant{{ "" if profile.variants|length == 1 else "s" }}</span>
     </div>
     {% endif %}
@@ -285,6 +285,7 @@
             {% if variant.reported_classification != variant.current_classification %}
             <div class="small text-body-secondary">First reported as {{ variant.reported_classification|class_label|lower }}</div>
             {% endif %}
+            {% if row.changed_across_releases %}<div class="d-md-none mt-1">{{ pm.class_history(row.history) }}</div>{% endif %}
           </td>
           <td class="d-none d-lg-table-cell">
             {% if row.known.known_variant_id %}
@@ -303,11 +304,13 @@
       </tbody>
     </table>
   </div>
-  <div class="card-footer profile-legend">
-    <span>{{ ui.amended_badge() }} classification changed since first report (FHIR status “amended”)</span>
-    <span>{{ ui.reclassified_badge() }} activated releases disagree</span>
-    <span>{{ ui.expert_panel_badge() }} ClinGen expert-panel classification</span>
+  {% if profile.any_amended or profile.any_reclassified or profile.any_expert_panel %}
+  <div class="card-footer profile-legend" role="note" aria-label="Badge legend">
+    {% if profile.any_amended %}<span>{{ ui.amended_badge() }} classification changed since first report (FHIR status “amended”)</span>{% endif %}
+    {% if profile.any_reclassified %}<span>{{ ui.reclassified_badge() }} class differs between activated releases</span>{% endif %}
+    {% if profile.any_expert_panel %}<span>{{ ui.expert_panel_badge() }} ClinGen expert-panel classification</span>{% endif %}
   </div>
+  {% endif %}
   {% else %}
   <div class="card-body">
     {% call ui.empty_state("diagram-2", "No genomic data yet", "Upload the patient's GRCh38 VCF. Variants in the seven-gene monogenic diabetes panel are classified against the current knowledge-base release.") %}

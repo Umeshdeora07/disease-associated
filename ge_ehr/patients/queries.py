@@ -357,6 +357,21 @@ class GenomicProfile:
     def actionable_count(self) -> int:
         return sum(C.is_actionable(row.variant.current_classification) for row in self.variants)
 
+    @property
+    def any_amended(self) -> bool:
+        """True when a variant's class changed since it was first reported (FHIR ``amended``)."""
+        return any(row.variant.is_amended for row in self.variants)
+
+    @property
+    def any_reclassified(self) -> bool:
+        """True when the activated releases disagree about the class of a variant."""
+        return any(row.changed_across_releases for row in self.variants)
+
+    @property
+    def any_expert_panel(self) -> bool:
+        """True when the current release holds an expert-panel classification of a variant."""
+        return any(row.known.is_expert_panel for row in self.variants)
+
 
 def genomic_profile(patient: Patient) -> GenomicProfile:
     """Classify the patient's variants for display (two queries plus one per 900 variants).
@@ -496,7 +511,8 @@ class ChangePoint:
 
     @property
     def display(self) -> str:
-        return format_moment(self.moment)
+        """The change time to the second; changes within the same second differ by their label."""
+        return self.at.strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
 @dataclass

@@ -21,7 +21,7 @@ from ge_ehr.alerts.review import COMMENT_MAX_LENGTH
 from ge_ehr.models import Alert, AlertEvent, AuditLog, ReviewNotice, User
 from ge_ehr.services import patient_records
 from tests.factories import make_alert, make_review_notice, make_run
-from tests.ui_data import Clinic, build_clinic
+from tests.ui_data import Clinic, build_clinic, csrf_clinic, csrf_token
 
 
 @pytest.fixture
@@ -167,7 +167,8 @@ def test_inbox_filters(clinician_client: FlaskClient, db: SQLAlchemy, clinic: Cl
 
 def test_inbox_filter_links_keep_other_filters(clinician_client: FlaskClient, clinic: Clinic) -> None:
     body = text(clinician_client.get("/alerts?rule=D5&reclassified=1"))
-    assert 'href="/alerts?rule=D5&amp;reclassified=1&amp;severity=high"' in body
+    assert 'href="/alerts?severity=high&amp;rule=D5&amp;reclassified=1"' in body
+    assert 'href="/alerts?rule=D5&amp;reclassified=1"' in body  # "All severities" keeps the rest
     assert "Reset" in body
     assert "No alerts match these filters" in body
 
@@ -218,6 +219,14 @@ def test_alert_detail_ignores_unsafe_next(clinician_client: FlaskClient, db: SQL
     alert = the_alert(db, clinic.carrier, "D2")
     body = text(clinician_client.get(f"/alerts/{alert.id}?next=https://evil.example/"))
     assert 'class="btn btn-outline-secondary" href="/alerts"' in body
+    assert "evil.example" not in body
+
+
+def test_inbox_severity_tab_is_kept_by_the_filter_form(clinician_client: FlaskClient, clinic: Clinic) -> None:
+    body = text(clinician_client.get("/alerts?severity=low"))
+    assert '<input type="hidden" name="severity" value="low">' in body
+    assert 'class="severity-tab severity-tab-low is-active"' in body
+    assert '<input type="hidden" name="severity"' not in text(clinician_client.get("/alerts"))
 
 
 def test_review_alert(clinician_client: FlaskClient, db: SQLAlchemy, clinician_user: User, clinic: Clinic) -> None:
@@ -294,6 +303,18 @@ def test_notices_list(clinician_client: FlaskClient, notice: ReviewNotice) -> No
     assert "GCK variant downgraded" in text(clinician_client.get("/notices?status=bogus"))
 
 
+def test_notices_paginate_and_keep_the_status_filter(
+    app: Flask, clinician_client: FlaskClient, db: SQLAlchemy, clinic: Clinic, notice: ReviewNotice
+) -> None:
+    app.config["ITEMS_PER_PAGE"] = 1
+    make_review_notice(clinic.carrier.variants[0], message="HNF1A variant downgraded.")
+    db.session.commit()
+    first = text(clinician_client.get("/notices?status=all"))
+    assert "Showing 1–1 of 2" in first and 'href="/notices?page=2&amp;status=all"' in first
+    second = text(clinician_client.get("/notices?status=all&page=2"))
+    assert "Showing 2–2 of 2" in second
+
+
 def test_acknowledge_notice(clinician_client: FlaskClient, db: SQLAlchemy, clinician_user: User, notice: ReviewNotice) -> None:
     data = {f"ack{notice.id}-comment": "Therapy was not changed.", f"ack{notice.id}-next": "/notices?status=all"}
     response = clinician_client.post(f"/notices/{notice.id}/acknowledge", data=data)
@@ -333,21 +354,22 @@ def test_acknowledge_from_the_recommendations_page_returns_there(
     assert "Open review notices" not in body and "Acknowledged review notices" in body
 
 
-def test_csrf_protected_forms_work_with_tokens(db: SQLAlchemy, clinic: Clinic, clinician_user: User) -> None:
-    from tests.conftest import build_app, login_client
-
-    application = build_app({"WTF_CSRF_ENABLED": True})
-    with application.app_context():
-        client = application.test_client()
-        login_page = text(client.get("/login"))
-        token = re.search(r'name="csrf_token" type="hidden" value="([^"]+)"', login_page).group(1)
-        client.post("/login", data={"username": clinician_user.username, "password": "Test-Pass-123!", "csrf_token": token})
-        alert = db.session.scalar(select(Alert).where(Alert.rule_code == "D2"))
-        page = text(client.get(f"/alerts/{alert.id}"))
-        token = re.search(r'name="csrf_token" type="hidden" value="([^"]+)"', page).group(1)
+def test_review_and_acknowledge_forms_carry_working_csrf_tokens(db: SQLAlchemy) -> None:
+    with csrf_clinic() as (client, clinic):
+        alert = the_alert(db, clinic.carrier, "D2")
+        notice = make_review_notice(clinic.gck_patient.variants[0])
+        db.session.commit()
+        token = csrf_token(client.get(f"/alerts/{alert.id}"))
         assert client.post(f"/alerts/{alert.id}/review", data={}).status_code == 400
-        response = client.post(f"/alerts/{alert.id}/review", data={"csrf_token": token})
+        assert client.post(f"/alerts/{alert.id}/review", data={"csrf_token": token}).status_code == 302
+        page = text(client.get("/notices"))
+        ack_token = re.search(rf'name="ack{notice.id}-csrf_token" type="hidden" value="([^"]+)"', page).group(1)
+        assert client.post(f"/notices/{notice.id}/acknowledge", data={}).status_code == 400
+        response = client.post(f"/notices/{notice.id}/acknowledge", data={f"ack{notice.id}-csrf_token": ack_token})
         assert response.status_code == 302
+        db.session.refresh(alert)
+        db.session.refresh(notice)
+        assert alert.status == "reviewed" and notice.status == "acknowledged"
 
 
 # ---------------------------------------------------------------------------

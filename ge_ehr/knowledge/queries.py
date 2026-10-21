@@ -42,15 +42,18 @@ from ..services.rules import RuleSpec, describe_clinical_condition, describe_gen
 
 #: Display order of change categories (most consequential first).
 CATEGORY_ORDER: dict[str, int] = {category: index for index, category in enumerate(C.CHANGE_CATEGORIES)}
-#: Outcome counters shown per change category / per rule (keys of ``ReevaluationRun.summary``).
-OUTCOME_FIELDS: tuple[tuple[str, str], ...] = (
-    ("alerts_created", "Alerts created"),
-    ("notes_created", "Notes created"),
-    ("alerts_superseded", "Superseded"),
-    ("alerts_confirmed", "Confirmed"),
-    ("review_notices", "Review notices"),
-    ("notifications", "Notifications"),
+#: Outcome counters shown per change category / per rule (keys of ``ReevaluationRun.summary``),
+#: with their column headings and descriptions.
+OUTCOME_FIELDS: tuple[tuple[str, str, str], ...] = (
+    ("alerts_created", "Alerts", "Alerts created"),
+    ("notes_created", "Notes", "Notes created"),
+    ("alerts_superseded", "Superseded", "Alerts and notes superseded"),
+    ("alerts_confirmed", "Confirmed", "Alerts and notes whose provenance was updated"),
+    ("review_notices", "Notices", "Review notices raised"),
+    ("notifications", "Notified", "Notifications: created alerts that notify plus review notices"),
 )
+#: Outcome columns hidden on narrow screens (the totals remain in the stat cards).
+OUTCOME_FIELDS_SECONDARY: frozenset[str] = frozenset({"notes_created", "alerts_confirmed"})
 #: Carriers listed per variant change on a run page (the count is always shown in full).
 CARRIERS_SHOWN = 6
 #: Patients listed in a run's "affected patients" section.
@@ -495,6 +498,7 @@ def rule_set_preview(doc: Mapping[str, Any]) -> RuleSetPreview:
     """
     current = dict(
         db.session.execute(select(RuleVersion.code, RuleVersion.version).where(RuleVersion.is_current.is_(True)))
+        .all()
     )
     specs = [RuleSpec.from_definition(definition) for definition in doc["rules"]]
     newest: dict[str, int] = {}

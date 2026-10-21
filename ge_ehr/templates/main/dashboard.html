@@ -15,28 +15,29 @@
 {% endcall %}
 
 {% set run = data.last_release_run %}
+<h2 class="visually-hidden">Key figures</h2>
 <div class="row g-3 mb-4 kpi-row">
   <div class="col-6 col-md-4 col-xl">{{ ui.stat_card("Patients", data.patients|number, "people", href=url_for('patients.list_patients'), hint="synthetic records") }}</div>
-  <div class="col-6 col-md-4 col-xl">{{ ui.stat_card("Carriers of actionable variants", data.actionable_carriers|number, "diagram-3", href=url_for('patients.list_patients'), hint="P or LP in a panel gene") }}</div>
+  <div class="col-6 col-md-4 col-xl">{{ ui.stat_card("Actionable carriers", data.actionable_carriers|number, "diagram-3", tone="danger" if data.actionable_carriers else "primary", hint="patients with a P/LP panel variant") }}</div>
   <div class="col-6 col-md-4 col-xl">
-    <div class="stat-card stat-card-danger">
+    <div class="stat-card stat-card-{{ 'danger' if data.current_alerts else 'primary' }}">
       <div class="stat-card-icon" aria-hidden="true"><i class="bi bi-bell-fill"></i></div>
       <div class="stat-card-body">
         <div class="stat-card-value">{{ data.current_alerts|number }}</div>
         <div class="stat-card-label"><a class="stretched-link" href="{{ url_for('alerts.inbox') }}">Current alerts</a></div>
         <ul class="severity-split" aria-label="Current alerts by severity">
-          {% for severity in C.SEVERITIES %}<li><span class="sev-dot sev-dot-{{ severity }}" aria-hidden="true"></span>{{ data.alerts_by_severity[severity] }} {{ severity|severity_label|lower }}</li>{% endfor %}
+          {% for severity in C.SEVERITIES %}<li><span class="sev-dot sev-dot-{{ severity }}" aria-hidden="true"></span>{{ data.alerts_by_severity[severity]|number }} {{ severity|severity_label|lower }}</li>{% endfor %}
         </ul>
       </div>
     </div>
   </div>
   <div class="col-6 col-md-4 col-xl">{{ ui.stat_card("Open review notices", data.open_notices|number, "clipboard2-pulse", href=url_for('alerts.notices'), tone="warning" if data.open_notices else "success", hint="downgrades awaiting review" if data.open_notices else "nothing to review") }}</div>
-  <div class="col-12 col-md-8 col-xl">{{ ui.stat_card("Reclassification alerts, last release", data.reclassified_in_last_run|number, "arrow-repeat", href=url_for('alerts.inbox', reclassified=1), tone="purple",
-        hint=("Run #" ~ run.id ~ " · " ~ (run.new_release.label if run.new_release else "release")) if run else "no release activated yet") }}</div>
+  <div class="col-12 col-md-8 col-xl">{{ ui.stat_card("Reclassification alerts", data.reclassified_in_last_run|number, "arrow-repeat", href=url_for('alerts.inbox', reclassified=1), tone="purple",
+        hint=("raised by run #" ~ run.id ~ ", the latest release activation") if run else "no release activated yet") }}</div>
 </div>
 
 <div class="row g-4">
-  <div class="col-xl-8">
+  <div class="col-xl-8 dashboard-main">
     <section class="card" aria-labelledby="attention-title">
       <div class="card-header">
         <h2 class="card-heading" id="attention-title"><i class="bi bi-flag-fill" aria-hidden="true"></i> Needs attention</h2>
@@ -52,35 +53,38 @@
             <div class="attention-meta">
               <a href="{{ url_for('patients.recommendations', patient_id=alert.patient_id) }}">{{ alert.patient.display_name }}</a>
               <span class="font-monospace">{{ alert.patient.mrn }}</span>
-              {{ ui.variant_key(alert.variant_key.label) }}
-              <span>{{ alert.created_at|dt }}</span>
+              <span>{{ ui.gene(alert.variant_key.gene) }} {{ ui.variant_key(alert.variant_key.label) }}</span>
+              <span class="text-nowrap">{{ alert.created_at|dt }}</span>
             </div>
           </div>
-          <div class="attention-badges">{{ ui.severity_badge(alert.severity) }}{{ ui.reclassified_badge() if alert.is_reclassified }}</div>
+          <div class="attention-badges">{{ ui.severity_badge(alert.severity) }}{{ ui.reclassified_badge() }}</div>
         </li>
         {% endfor %}
         {% for notice in data.attention_notices %}
         <li class="attention-item attention-notice">
           <span class="attention-icon" aria-hidden="true"><i class="bi bi-clipboard2-pulse-fill"></i></span>
           <div class="attention-body">
-            <a class="attention-title" href="{{ url_for('alerts.notices') }}">Review notice · {{ ui.gene(notice.variant_key.gene) }} variant {{ notice.old_classification }} → {{ notice.new_classification }}</a>
+            <a class="attention-title" href="{{ url_for('alerts.notices') }}">Review notice · {{ ui.gene(notice.variant_key.gene) }} variant {{ "reclassified" if notice.old_classification != notice.new_classification else "re-evaluated" }}</a>
             <div class="attention-meta">
               <a href="{{ url_for('patients.recommendations', patient_id=notice.patient_id) }}">{{ notice.patient.display_name }}</a>
               <span class="font-monospace">{{ notice.patient.mrn }}</span>
               {{ ui.variant_key(notice.variant_key.label) }}
-              <span>{{ notice.created_at|dt }}</span>
+              <span class="text-nowrap">{{ notice.created_at|dt }}</span>
             </div>
           </div>
-          <div class="attention-badges">{{ ui.status_badge("open") }}</div>
+          <div class="attention-badges">
+            {% if notice.old_classification != notice.new_classification %}{{ kb.class_change(notice.old_classification, notice.new_classification) }}{% endif %}
+            {{ ui.status_badge("open") }}
+          </div>
         </li>
         {% endfor %}
       </ul>
       <div class="card-footer card-footer-links">
-        <a href="{{ url_for('alerts.inbox', reclassified=1) }}">All reclassification alerts</a>
-        <a href="{{ url_for('alerts.notices') }}">All review notices</a>
+        <a href="{{ url_for('alerts.inbox', reclassified=1) }}">All reclassification alerts{% if data.attention_alerts_hidden > 0 %} ({{ data.attention_alerts_hidden|number }} more high priority){% endif %}</a>
+        <a href="{{ url_for('alerts.notices') }}">All review notices{% if data.attention_notices_hidden > 0 %} ({{ data.attention_notices_hidden|number }} more open){% endif %}</a>
       </div>
       {% else %}
-      <div class="card-body">{{ ui.empty_state("check2-circle", "Nothing needs attention", "No high-priority reclassification alert is active and every review notice has been acknowledged.") }}</div>
+      <div class="card-body">{{ ui.empty_state("check2-circle", "Nothing needs attention", "No high-priority reclassification alert awaits review and every review notice has been acknowledged.") }}</div>
       {% endif %}
     </section>
 
@@ -105,6 +109,7 @@
           {% endfor %}
         </ul>
         <div class="bar-legend" aria-hidden="true">
+          <span>Bar colour = rule severity:</span>
           {% for severity in C.SEVERITIES %}<span><span class="sev-dot sev-dot-{{ severity }}"></span>{{ severity|severity_label }}</span>{% endfor %}
         </div>
         {% else %}
@@ -120,23 +125,24 @@
       </div>
       {% if data.recent_runs %}
       <div class="table-responsive">
-        <table class="table table-app align-middle">
+        <table class="table table-app align-middle kb-stack-xs">
           <thead><tr><th scope="col">Run</th><th scope="col">Knowledge change</th><th scope="col" class="text-end d-none d-sm-table-cell">Changed</th><th scope="col" class="text-end d-none d-md-table-cell">Patients</th><th scope="col" class="text-end">Notified</th><th scope="col" class="d-none d-sm-table-cell">Status</th></tr></thead>
           <tbody>
             {% for item in data.recent_runs %}
             <tr>
-              <td>{{ kb.run_link(item) }}<div class="small text-body-secondary text-nowrap">{{ item.started_at|dt }}</div></td>
+              <td><div class="run-cell-head">{{ kb.run_link(item) }}<span class="d-sm-none">{{ ui.status_badge(item.status) }}</span></div><div class="small text-body-secondary text-nowrap">{{ item.started_at|dt }}</div></td>
               <td>
                 <div>{{ kb.trigger_label(item.trigger) }}</div>
                 <div class="small text-body-secondary">
-                  {%- if item.trigger == "clinvar_release" %}{{ item.old_release.label if item.old_release else "None" }} → {{ item.new_release.label if item.new_release else "—" }}
+                  {%- if item.trigger == "clinvar_release" and not item.old_release %}Initial classification · <span class="text-nowrap">{{ item.new_release.label if item.new_release else "—" }}</span>
+                  {%- elif item.trigger == "clinvar_release" %}<span class="text-nowrap">{{ item.old_release.label }}</span> <span class="text-nowrap">→ {{ item.new_release.label if item.new_release else "—" }}</span>
                   {%- elif item.trigger == "rule_revision" %}{% for change in item.rule_change or [] %}{{ change.code }} v{{ change.old_version or "—" }} → v{{ change.new_version }}{% if not loop.last %}, {% endif %}{% else %}No rule changed{% endfor %}
                   {%- else %}All patients{% endif -%}
                 </div>
               </td>
               <td class="text-end num d-none d-sm-table-cell">{{ item.changed_variants|number if item.trigger == "clinvar_release" else "—" }}</td>
               <td class="text-end num d-none d-md-table-cell">{{ item.patients_reevaluated|number }}</td>
-              <td class="text-end num">{{ item.notifications|number }}</td>
+              <td class="text-end num"><span class="xs-label">Notified</span>{{ item.notifications|number }}</td>
               <td class="d-none d-sm-table-cell">{{ ui.status_badge(item.status) }}</td>
             </tr>
             {% endfor %}
@@ -144,12 +150,12 @@
         </table>
       </div>
       {% else %}
-      <div class="card-body">{{ ui.empty_state("arrow-repeat", "No re-evaluation run yet", "Runs appear here when a release is activated or a rule set is imported.") }}</div>
+      <div class="card-body">{{ ui.empty_state("arrow-repeat", "No re-evaluation run yet", "Runs appear here when a release is activated, a rule set is imported or a full recomputation is started.") }}</div>
       {% endif %}
     </section>
   </div>
 
-  <div class="col-xl-4">
+  <div class="col-xl-4 dashboard-side">
     <section class="card kb-summary-card" aria-labelledby="kb-title">
       <div class="card-header"><h2 class="card-heading" id="kb-title"><i class="bi bi-layers" aria-hidden="true"></i> Current knowledge base</h2></div>
       <div class="card-body">
@@ -159,7 +165,7 @@
         <div class="badge-row mb-3">{{ kb.release_badges(release) }}</div>
         <dl class="dl-grid dl-compact">
           <dt>Release date</dt><dd>{{ release.release_date|date }}</dd>
-          <dt>Records</dt><dd>{{ release.record_count|number }} in 7 genes</dd>
+          <dt>Records</dt><dd>{{ release.record_count|number }} in {{ C.GENES|length }} genes</dd>
           <dt>Activated</dt><dd>{{ release.activated_at|dt }}</dd>
           <dt>Sequence</dt><dd>#{{ release.sequence or "—" }}</dd>
         </dl>
@@ -168,19 +174,20 @@
           <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
           <span>No release is active, so every patient variant is “not classified” and no genetic rule can fire.</span>
         </div>
-        {% if is_admin %}<a class="btn btn-sm btn-primary mt-2" href="{{ url_for('knowledge.import_release') }}"><i class="bi bi-upload" aria-hidden="true"></i> Import release</a>{% endif %}
+        {% if is_admin %}<a class="btn btn-sm btn-primary mt-3" href="{{ url_for('knowledge.import_release') }}"><i class="bi bi-upload" aria-hidden="true"></i> Import release</a>{% endif %}
         {% endif %}
         <hr class="form-divider">
-        <div class="kb-subhead">Decision rules
-          {% if data.rule_versions and data.rule_versions[0].rule_set_label %}<span class="text-body-secondary fw-normal">· {{ data.rule_versions|map(attribute="rule_set_label")|reject("none")|unique|join(", ") }}</span>{% endif %}</div>
+        {% set rule_sets = data.rule_versions|map(attribute="rule_set_label")|reject("none")|unique|list %}
+        <div class="kb-subhead">Decision rules{% if rule_sets %} <span class="text-body-secondary fw-normal">· rule set {{ rule_sets|join(", ") }}</span>{% endif %}</div>
         {% if data.rule_versions %}
         <div class="version-chip-row">{% for version in data.rule_versions %}<a class="version-chip" href="{{ url_for('knowledge.rules', _anchor='rule-' ~ version.code) }}" title="{{ version.title }}">{{ version.label }}</a>{% endfor %}</div>
         {% else %}
-        <p class="small text-body-secondary mb-0">No rules loaded.</p>
+        <p class="small text-body-secondary mb-0">No rules loaded{% if is_admin %} — <a href="{{ url_for('knowledge.import_rules') }}">import a rule set</a>{% endif %}.</p>
         {% endif %}
       </div>
       <div class="card-footer card-footer-links">
         <a href="{{ url_for('knowledge.releases') }}">Releases</a>
+        <a href="{{ url_for('knowledge.compare_releases') }}">Compare</a>
         <a href="{{ url_for('knowledge.rules') }}">Rules</a>
         <a href="{{ url_for('knowledge.runs') }}">Runs</a>
       </div>
@@ -189,12 +196,12 @@
     <section class="card" aria-labelledby="how-title">
       <div class="card-header"><h2 class="card-heading" id="how-title"><i class="bi bi-lightbulb" aria-hidden="true"></i> Reclassification-aware</h2></div>
       <div class="card-body">
-        <p class="small mb-2">When a new ClinVar release or rule version is imported, GE-EHR re-checks only the stored variants whose classification changed and their carriers:</p>
-        <ul class="category-list mb-3">
-          <li>{{ kb.category_badge("upgrade") }} new alert, high priority</li>
-          <li>{{ kb.category_badge("downgrade") }} alert superseded, review notice</li>
-          <li>{{ kb.category_badge("within_actionable") }} provenance updated silently</li>
-        </ul>
+        <p class="small mb-2">When a new ClinVar release or rule version is imported, GE-EHR re-checks only the stored variants whose classification changed, for every carrier:</p>
+        <dl class="category-legend category-legend-compact mb-3">
+          <dt>{{ kb.category_badge("upgrade") }}</dt><dd>New alert, high priority, clinician notified</dd>
+          <dt>{{ kb.category_badge("downgrade") }}</dt><dd>Alert superseded, review notice raised</dd>
+          <dt>{{ kb.category_badge("within_actionable") }}</dt><dd>Provenance updated, no notification</dd>
+        </dl>
         {{ ui.advisory_disclaimer() }}
       </div>
     </section>

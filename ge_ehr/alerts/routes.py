@@ -71,12 +71,13 @@ def inbox() -> str:
 def view_alert(alert_id: int) -> str:
     """One alert or note with its recommendation, rule criteria, provenance timeline and review."""
     alert = queries.load_alert(alert_id)
+    next_url = safe_next_url(request.args.get("next"), "")
     return render_template(
         "alerts/detail.html",
         alert=alert,
         criteria=queries.rule_criteria(alert),
-        form=ReviewAlertForm(formdata=None, next=request.args.get("next", "")),
-        back_url=safe_next_url(request.args.get("next"), url_for("alerts.inbox")),
+        form=ReviewAlertForm(formdata=None, next=next_url),
+        back_url=next_url or url_for("alerts.inbox"),
     )
 
 

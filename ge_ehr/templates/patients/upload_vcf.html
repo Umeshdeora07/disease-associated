@@ -59,7 +59,7 @@
           <li><strong>VCF 4.2</strong> (4.1 and 4.3 are accepted) with a <code>#CHROM</code> header line.</li>
           <li><strong>GRCh38</strong> coordinates. Files declaring GRCh37/hg19 are rejected.</li>
           <li><strong>One sample</strong> with a <code>GT</code> genotype; only the first sample column is read.</li>
-          <li>Records with FILTER <code>PASS</code> or <code>.</code> are kept; reference calls (0/0) are skipped.</li>
+          <li>Records whose FILTER is <code>PASS</code> or missing (<code>.</code>) are kept; reference calls (<code>0/0</code>) are skipped.</li>
           <li>Only the <strong>seven panel genes</strong> below are stored; other records are counted as off-panel.</li>
         </ul>
         <h3 class="side-help-subtitle">Gene panel (GRCh38)</h3>

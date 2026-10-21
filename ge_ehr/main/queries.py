@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sqlalchemy import distinct, exists, func, select
+from sqlalchemy import case, distinct, exists, func, select
 from sqlalchemy.orm import joinedload
 
 from .. import constants as C
@@ -19,11 +19,19 @@ from ..extensions import db
 from ..models import Alert, GenomicUpload, KbRelease, Patient, PatientVariant, ReevaluationRun, ReviewNotice, RuleVersion
 from ..services.rules import rule_code_sort_key
 
-#: Items per "needs attention" list, recent runs and recent uploads.
+#: Items per "needs attention" list (alerts and notices each), recent runs and recent uploads.
 ATTENTION_ITEMS = 6
 RECENT_RUNS = 5
 RECENT_UPLOADS = 8
 AWAITING_VCF_SHOWN = 6
+
+#: "Needs attention": active (not yet reviewed) high-priority alerts raised by a reclassification.
+_ATTENTION_ALERT = (
+    (Alert.status == "active")
+    & (Alert.kind == "alert")
+    & Alert.is_reclassified.is_(True)
+    & (Alert.priority == "high")
+)
 
 
 @dataclass(frozen=True)
@@ -50,6 +58,7 @@ class ClinicalDashboard:
     release: KbRelease | None
     rule_versions: list[RuleVersion]
     attention_alerts: list[Alert]
+    attention_alerts_total: int
     attention_notices: list[ReviewNotice]
     recent_runs: list[ReevaluationRun]
     rule_bars: list[RuleBar]
@@ -61,7 +70,18 @@ class ClinicalDashboard:
 
     @property
     def needs_attention(self) -> bool:
+        """True when a reclassification alert awaits review or a review notice is open."""
         return bool(self.attention_alerts or self.attention_notices)
+
+    @property
+    def attention_alerts_hidden(self) -> int:
+        """Attention alerts beyond those listed."""
+        return self.attention_alerts_total - len(self.attention_alerts)
+
+    @property
+    def attention_notices_hidden(self) -> int:
+        """Open review notices beyond those listed."""
+        return self.open_notices - len(self.attention_notices)
 
 
 def _patient_count() -> int:
@@ -74,7 +94,7 @@ def _alerts_by_severity() -> dict[str, int]:
         .where(Alert.kind == "alert", Alert.status.in_(C.CURRENT_ALERT_STATUSES))
         .group_by(Alert.severity)
     )
-    counts = dict(rows.tuples().all())
+    counts = dict(rows.all())
     return {severity: counts.get(severity, 0) for severity in C.SEVERITIES}
 
 
@@ -97,7 +117,6 @@ def _rule_bars(rule_versions: list[RuleVersion]) -> list[RuleBar]:
             .where(Alert.kind == "alert", Alert.status.in_(C.CURRENT_ALERT_STATUSES))
             .group_by(Alert.rule_code)
         )
-        .tuples()
         .all()
     )
     busiest = max(counts.values(), default=0)
@@ -133,13 +152,15 @@ def clinical_dashboard() -> ClinicalDashboard:
             )
             or 0
         )
+    severity_rank = case(C.SEVERITY_ORDER, value=Alert.severity, else_=-1)
     attention_alerts = db.session.scalars(
         select(Alert)
         .options(joinedload(Alert.patient), joinedload(Alert.variant_key))
-        .where(Alert.status == "active", Alert.kind == "alert", Alert.priority == "high")
-        .order_by(Alert.created_at.desc(), Alert.id.desc())
+        .where(_ATTENTION_ALERT)
+        .order_by(severity_rank.desc(), Alert.created_at.desc(), Alert.id.desc())
         .limit(ATTENTION_ITEMS)
     ).all()
+    attention_total = db.session.scalar(select(func.count(Alert.id)).where(_ATTENTION_ALERT)) or 0
     attention_notices = db.session.scalars(
         select(ReviewNotice)
         .options(joinedload(ReviewNotice.patient), joinedload(ReviewNotice.variant_key))
@@ -164,6 +185,7 @@ def clinical_dashboard() -> ClinicalDashboard:
         release=KbRelease.current(),
         rule_versions=sorted(rule_versions, key=lambda version: rule_code_sort_key(version.code)),
         attention_alerts=list(attention_alerts),
+        attention_alerts_total=attention_total,
         attention_notices=list(attention_notices),
         recent_runs=list(recent_runs),
         rule_bars=_rule_bars(rule_versions),
@@ -186,7 +208,6 @@ def lab_dashboard() -> LabDashboard:
     """Counts of patients and uploads, the latest uploads and patients without an accepted VCF."""
     uploads = dict(
         db.session.execute(select(GenomicUpload.status, func.count(GenomicUpload.id)).group_by(GenomicUpload.status))
-        .tuples()
         .all()
     )
     has_accepted = exists().where(GenomicUpload.patient_id == Patient.id, GenomicUpload.status == "accepted")

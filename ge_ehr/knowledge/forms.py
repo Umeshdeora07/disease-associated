@@ -33,12 +33,12 @@ NOTES_MAX_LENGTH = 2_000
 
 #: Re-evaluation strategies offered for an activation or a rule-set import (SPEC §7.1–§7.3).
 STRATEGY_CHOICES: list[tuple[str, str]] = [
-    ("change_driven", "Change-driven (GE-EHR) — re-evaluate only the carriers of what changed"),
-    ("full", "Full recomputation — re-evaluate every patient"),
+    ("change_driven", "Change-driven (GE-EHR)"),
+    ("full", "Full recomputation"),
 ]
 STRATEGY_HELP = (
-    "Both strategies reach the same alerts. Change-driven examines far fewer records; full recomputation is the "
-    "reference strategy of the evaluation."
+    "Change-driven re-evaluates only the carriers of what changed; full recomputation re-evaluates every "
+    "patient. Both reach the same alerts, but change-driven examines far fewer records."
 )
 
 

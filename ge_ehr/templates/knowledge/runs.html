@@ -42,30 +42,31 @@
 
 <div class="card card-table">
   <div class="table-responsive">
-    <table class="table table-app align-middle run-table">
+    <table class="table table-app align-middle run-table kb-stack-xs">
       <thead>
         <tr>
           <th scope="col">Run</th>
           <th scope="col">Knowledge change</th>
           <th scope="col" class="d-none d-lg-table-cell">Work</th>
           <th scope="col">Outcome</th>
-          <th scope="col" class="d-none d-md-table-cell text-end">Duration</th>
-          <th scope="col" class="d-none d-sm-table-cell">Status</th>
         </tr>
       </thead>
       <tbody>
         {% for run in pagination.items %}
         <tr{% if run.status == "failed" %} class="row-failed"{% endif %}>
           <td class="run-cell">
-            {{ kb.run_link(run) }}
+            <div class="run-cell-head">{{ kb.run_link(run) }}{{ ui.status_badge(run.status) }}</div>
             <div>{{ kb.trigger_label(run.trigger) }}</div>
             <div class="small text-body-secondary text-nowrap">{{ run.started_at|dt }}</div>
-            <div class="small text-body-secondary">{{ run.strategy|strategy_label }} · {{ run.initiated_by.full_name if run.initiated_by else "System" }}</div>
-            <div class="d-sm-none mt-1">{{ ui.status_badge(run.status) }}</div>
+            <div class="small text-body-secondary">{{ run.strategy|strategy_label }} · <span class="text-nowrap" title="Duration">{{ run.duration_ms|duration_ms }}</span></div>
+            <div class="small text-body-secondary">by {{ run.initiated_by.full_name if run.initiated_by else "System" }}</div>
           </td>
           <td>
             {% if run.trigger == "clinvar_release" %}
-            <div class="release-transition">{{ kb.release_link(run.old_release, empty="None") }} <i class="bi bi-arrow-right" aria-hidden="true"></i><span class="visually-hidden">to</span> {{ kb.release_link(run.new_release) }}</div>
+            <div class="release-transition">
+              <span>{{ kb.release_link(run.old_release, empty="No release (initial)") }}</span>
+              <span class="release-to"><i class="bi bi-arrow-right" aria-hidden="true"></i><span class="visually-hidden">to</span>{{ kb.release_link(run.new_release) }}</span>
+            </div>
             {% elif run.trigger == "rule_revision" %}
             <div class="version-chip-row">{{ kb.rule_changes(run.rule_change or []) }}</div>
             <div class="small text-body-secondary">under {{ kb.release_link(run.new_release) }}</div>
@@ -75,7 +76,7 @@
           </td>
           <td class="d-none d-lg-table-cell">
             <dl class="counter-list">
-              {% if run.trigger == "clinvar_release" %}<div><dt>Keys compared</dt><dd>{{ run.stored_keys_compared|number }}</dd></div>
+              {% if run.trigger == "clinvar_release" %}<div><dt title="Stored patient variant keys compared">Compared</dt><dd>{{ run.stored_keys_compared|number }}</dd></div>
               <div><dt>Changed</dt><dd>{{ run.changed_variants|number }}</dd></div>{% endif %}
               <div><dt>Carriers</dt><dd>{{ run.carriers_affected|number }}</dd></div>
               <div><dt>Patients</dt><dd>{{ run.patients_reevaluated|number }}</dd></div>
@@ -87,7 +88,8 @@
             <span class="small text-danger-emphasis">No change applied</span>
             {% else %}
             <dl class="counter-list counter-list-outcome">
-              <div><dt>Created</dt><dd>{{ (run.alerts_created + run.notes_created)|number }}</dd></div>
+              <div><dt>Alerts</dt><dd>{{ run.alerts_created|number }}</dd></div>
+              <div><dt>Notes</dt><dd>{{ run.notes_created|number }}</dd></div>
               <div><dt>Superseded</dt><dd>{{ run.alerts_superseded|number }}</dd></div>
               <div><dt>Confirmed</dt><dd>{{ run.alerts_confirmed|number }}</dd></div>
               <div{% if run.review_notices %} class="is-notable"{% endif %}><dt>Notices</dt><dd>{{ run.review_notices|number }}</dd></div>
@@ -95,11 +97,9 @@
             </dl>
             {% endif %}
           </td>
-          <td class="d-none d-md-table-cell text-end text-nowrap num">{{ run.duration_ms|duration_ms }}</td>
-          <td class="d-none d-sm-table-cell">{{ ui.status_badge(run.status) }}</td>
         </tr>
         {% else %}
-        <tr><td colspan="6">
+        <tr><td colspan="4">
           {% if filters.trigger or filters.status %}
           {% call ui.empty_state("funnel", "No run matches these filters") %}<a class="btn btn-outline-secondary" href="{{ url_for('knowledge.runs') }}">Clear filters</a>{% endcall %}
           {% else %}

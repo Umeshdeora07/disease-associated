@@ -96,7 +96,7 @@
           {% if show_alerts %}<td>{{ pm.severity_counts(row.alert_counts) }}</td>{% endif %}
           <td class="d-none d-md-table-cell text-nowrap">
             {%- if row.last_upload %}
-            <div>{{ row.last_upload.uploaded_at|date }}</div>
+            <div>{{ row.last_upload.uploaded_at|dt }}</div>
             {%- if row.last_upload.status == "rejected" %}<div>{{ ui.status_badge("rejected") }}</div>{% endif %}
             {%- else %}<span class="text-body-secondary">No VCF yet</span>{% endif -%}
           </td>

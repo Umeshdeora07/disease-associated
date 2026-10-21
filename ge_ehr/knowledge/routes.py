@@ -61,6 +61,7 @@ def knowledge_helpers() -> dict[str, Any]:
     return {
         "proportion_segments": queries.proportion_segments,
         "outcome_fields": queries.OUTCOME_FIELDS,
+        "secondary_outcomes": queries.OUTCOME_FIELDS_SECONDARY,
         "preview_labels": queries.PREVIEW_STATUS_LABELS,
     }
 

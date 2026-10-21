@@ -22,7 +22,7 @@ from ge_ehr.patients.forms import drug_suggestions
 from ge_ehr.patients.routes import describe_outcome
 from ge_ehr.services.alerting import ReconcileResult
 from tests.factories import make_patient, make_review_notice
-from tests.ui_data import GCK_LP, HNF1A_P, Clinic, build_clinic, vcf_bytes
+from tests.ui_data import GCK_LP, HNF1A_P, Clinic, build_clinic, csrf_clinic, csrf_token, vcf_bytes
 
 
 @pytest.fixture
@@ -238,6 +238,7 @@ def test_create_patient_reports_missing_fields(clinician_client: FlaskClient, db
     assert "Enter the given name." in body
     assert "Enter the birth date." in body
     assert "Enter a whole number of months" in body
+    assert "The patient was not saved. Correct the 3 highlighted fields below." in body
     assert db.session.scalar(select(func.count(Patient.id))) == 0
 
 
@@ -538,6 +539,19 @@ def test_upload_by_lab_technician_does_not_reveal_alerts(lab_client: FlaskClient
     assert "alert" not in page.split("Decision support has been updated")[0].split("accepted:")[1]
 
 
+def test_upload_summary_counts_skipped_records(clinician_client: FlaskClient, clinic: Clinic) -> None:
+    data = vcf_bytes(GCK_LP) + (
+        b"12\t120994300\t.\tC\tT\t50\tLowQual\t.\tGT\t0/1\n"
+        b"7\t44145200\t.\tC\tT\t50\tPASS\t.\tGT\t0/0\n"
+    )
+    response = upload(clinician_client, clinic.plain, data, "mixed.vcf")
+    page = text(clinician_client.get(response.headers["Location"]))
+    assert (
+        "VCF mixed.vcf accepted: 1 panel variant, 0 off-panel records skipped, 1 non-PASS record skipped, "
+        "1 reference call skipped."
+    ) in page
+
+
 def test_upload_without_panel_variants(clinician_client: FlaskClient, clinic: Clinic) -> None:
     response = upload(clinician_client, clinic.plain, vcf_bytes(("1", 5000, "C", "T"), ("1", 6000, "G", "A")))
     page = text(clinician_client.get(response.headers["Location"]))
@@ -646,6 +660,42 @@ def test_recommendations_for_a_patient_without_findings(clinician_client: FlaskC
 
 
 # ---------------------------------------------------------------------------
+# CSRF
+# ---------------------------------------------------------------------------
+
+
+def _prefixed_token(page: str, prefix: str) -> str:
+    return re.search(rf'name="{prefix}csrf_token" type="hidden" value="([^"]+)"', page).group(1)
+
+
+def test_patient_forms_carry_working_csrf_tokens(db: SQLAlchemy) -> None:
+    from io import BytesIO
+
+    with csrf_clinic() as (client, clinic):
+        patient = clinic.carrier
+        page = text(client.get(f"/patients/{patient.id}"))
+        diagnosis = {"dx-diabetes_type": "monogenic", "dx-age_at_diagnosis_months": "180"}
+        assert client.post(f"/patients/{patient.id}/diagnosis", data=diagnosis).status_code == 400
+        response = client.post(
+            f"/patients/{patient.id}/diagnosis", data=dict(diagnosis, **{"dx-csrf_token": _prefixed_token(page, "dx-")})
+        )
+        assert response.status_code == 302
+        medication = {"med-drug_name": "Metformin", "med-csrf_token": _prefixed_token(page, "med-")}
+        assert client.post(f"/patients/{patient.id}/medications", data=medication).status_code == 302
+        stop_url = f"/patients/{patient.id}/medications/{patient.medications[0].id}/stop"
+        assert client.post(stop_url).status_code == 400
+        assert client.post(stop_url, data={"csrf_token": csrf_token(client.get(f"/patients/{patient.id}"))}).status_code == 302
+        token = csrf_token(client.get(f"/patients/{clinic.plain.id}/vcf"))
+        upload_data = {"vcf_file": (BytesIO(vcf_bytes(GCK_LP)), "plain.vcf"), "csrf_token": token}
+        response = client.post(f"/patients/{clinic.plain.id}/vcf", data=upload_data, content_type="multipart/form-data")
+        assert response.status_code == 302
+        db.session.expire_all()
+        assert patient.diagnosis.diabetes_type == "monogenic"
+        assert {medication.drug_name for medication in patient.medications} == {"Insulin glargine", "Metformin"}
+        assert len(clinic.plain.variants) == 1
+
+
+# ---------------------------------------------------------------------------
 # View-model helpers
 # ---------------------------------------------------------------------------
 
@@ -676,6 +726,7 @@ def test_change_point_selects_the_state_right_after_the_change() -> None:
     point = queries.ChangePoint(at=datetime(2026, 1, 15, 9, 30, 5, 250400), label="VCF upload", run_id=None, created=2, superseded=0)
     assert point.moment == datetime(2026, 1, 15, 9, 30, 5, 251000)
     assert point.value == "2026-01-15T09:30:05.251"
+    assert point.display == "2026-01-15 09:30:05 UTC"
     assert queries.parse_point_in_time(point.value) >= point.at
 
 
@@ -706,6 +757,15 @@ def test_genomic_profile_history_and_hgvs(app: Flask, db: SQLAlchemy, clinic: Cl
     assert row.known.is_expert_panel and row.known.review_stars == 3
     assert [step.classification for step in row.history] == ["P"]
     assert not row.changed_across_releases
+    assert profile.any_expert_panel and not profile.any_amended and not profile.any_reclassified
+
+
+def test_genomic_profile_legend_lists_only_the_flags_present(clinician_client: FlaskClient, clinic: Clinic) -> None:
+    carrier = text(clinician_client.get(f"/patients/{clinic.carrier.id}"))
+    assert "ClinGen expert-panel classification" in carrier
+    assert "FHIR status “amended”" not in carrier and "class differs between activated releases" not in carrier
+    gck = text(clinician_client.get(f"/patients/{clinic.gck_patient.id}"))
+    assert 'aria-label="Badge legend"' not in gck
 
 
 def test_alert_summary_counts(app: Flask, db: SQLAlchemy, clinic: Clinic) -> None:

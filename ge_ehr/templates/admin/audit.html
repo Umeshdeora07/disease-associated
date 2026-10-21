@@ -1,17 +1,60 @@
+{#- Audit log (admin): filters by action and user, readable details with the full record on demand. -#}
 {% extends "base.html" %}
 {% import "_macros.html" as ui %}
+
+{#- Security-relevant actions are highlighted. -#}
+{% set security_actions = ("login_failed", "account_locked", "access_denied", "vcf_upload_rejected", "password_change_failed") %}
+{#- Detail keys worth showing inline, most informative first; everything else is behind "Full record". -#}
+{% set summary_keys = ("label", "mrn", "username", "role", "reason", "path", "filename", "drug_name", "drug_class",
+                       "diabetes_type", "trigger", "strategy", "status", "previous_release", "rule_set", "record_count",
+                       "changed_variants", "patients_reevaluated", "notifications", "panel_variants", "comment", "run_id") %}
+{% set inline_limit = 4 %}
+{#- Detail keys whose humanised form reads badly. -#}
+{% set key_labels = {"mrn": "MRN", "run_id": "Run", "sha256": "SHA-256", "file_sha256": "SHA-256",
+                     "patient_id": "Patient ID", "fhir_version": "FHIR version"} %}
+
+{#- One detail value as short text: nested values are summarised, long text is shortened. -#}
+{% macro audit_value(value) -%}
+{%- if value is none %}—
+{%- elif value is sameas true %}yes
+{%- elif value is sameas false %}no
+{%- elif value is mapping %}{{ value|length }} field{{ "" if value|length == 1 else "s" }}
+{%- elif value is string %}{% if value|length > 48 %}<span title="{{ value }}">{{ value|truncate(48, true, "…", 0) }}</span>{% else %}{{ value }}{% endif %}
+{%- elif value is iterable %}{% if value|select("mapping")|list %}{{ value|length }} item{{ "" if value|length == 1 else "s" }}{% else %}{{ value|join(", ") or "none" }}{% endif %}
+{%- elif value is number %}{{ value|number }}
+{%- else %}{{ value }}{% endif -%}
+{%- endmacro %}
+
+{#- The audited entity, linked to its page when it has one. -#}
+{% macro entity(entry) -%}
+{%- set detail = entry.detail or {} -%}
+{%- set name = entry.entity_type ~ (" #" ~ entry.entity_id if entry.entity_id is not none else "") -%}
+{%- if entry.entity_type == "patient" and entry.entity_id is not none -%}<a href="{{ url_for('patients.view_patient', patient_id=entry.entity_id) }}">{{ name }}</a>
+{%- elif entry.entity_type in ("medication", "genomic_upload") and detail.patient_id is number -%}<span>{{ name }}</span><div class="small"><a href="{{ url_for('patients.view_patient', patient_id=detail.patient_id) }}">Patient {{ detail.mrn or ("#" ~ detail.patient_id) }}</a></div>
+{%- elif entry.entity_type == "kb_release" and entry.entity_id is not none -%}<a href="{{ url_for('knowledge.view_release', release_id=entry.entity_id) }}">{{ name }}</a>
+{%- elif entry.entity_type == "reevaluation_run" and entry.entity_id is not none -%}<a href="{{ url_for('knowledge.view_run', run_id=entry.entity_id) }}">{{ name }}</a>
+{%- elif entry.entity_type == "alert" and entry.entity_id is not none -%}<a href="{{ url_for('alerts.view_alert', alert_id=entry.entity_id) }}">{{ name }}</a>
+{%- elif entry.entity_type == "review_notice" -%}<a href="{{ url_for('alerts.notices') }}">{{ name }}</a>
+{%- elif entry.entity_type == "rule_set" -%}<a href="{{ url_for('knowledge.rules') }}">{{ name }}</a>
+{%- elif entry.entity_type == "user" -%}<a href="{{ url_for('admin.users') }}">{{ name }}</a>
+{%- elif entry.entity_type -%}{{ name }}
+{%- else -%}<span class="text-body-secondary">—</span>{%- endif -%}
+{%- endmacro %}
+
 {% block title %}Audit log{% endblock %}
 {% block content %}
-{% set security_actions = ("login_failed", "account_locked", "access_denied", "vcf_upload_rejected", "password_change_failed") %}
-{{ ui.page_header("Audit log", "Security-relevant actions, newest first. Entries cannot be edited or deleted.", icon="clock-history") }}
-<form class="card filter-bar" method="get" action="{{ url_for('admin.audit') }}" role="search" aria-label="Filter audit log">
+{% call ui.page_header("Audit log", "Security-relevant actions, newest first. Entries are written by the system and cannot be edited or deleted.", icon="clock-history") %}
+  <a class="btn btn-outline-primary" href="{{ url_for('admin.users') }}"><i class="bi bi-person-gear" aria-hidden="true"></i> Users</a>
+{% endcall %}
+
+<form class="card filter-bar" method="get" action="{{ url_for('admin.audit') }}" role="search" aria-label="Filter the audit log">
   <div class="card-body">
     <div class="row g-2 align-items-end">
       <div class="col-sm-6 col-md-4">
         <label class="form-label" for="filter-action">Action</label>
         <select class="form-select" id="filter-action" name="action" data-autosubmit>
           <option value="">All actions</option>
-          {% for action in actions %}<option value="{{ action }}"{% if action == filters.action %} selected{% endif %}>{{ action }}</option>{% endfor %}
+          {% for action in actions %}<option value="{{ action }}"{% if action == filters.action %} selected{% endif %}>{{ action }}{% if action in security_actions %} (security){% endif %}</option>{% endfor %}
         </select>
       </div>
       <div class="col-sm-6 col-md-4">
@@ -21,16 +64,18 @@
           {% for username in usernames %}<option value="{{ username }}"{% if username == filters.user %} selected{% endif %}>{{ username }}</option>{% endfor %}
         </select>
       </div>
-      <div class="col-md-4 d-flex gap-2">
+      <div class="col-md-4 d-flex gap-2 justify-content-md-end">
         <button type="submit" class="btn btn-primary"><i class="bi bi-funnel" aria-hidden="true"></i> Apply</button>
-        {% if filters.action or filters.user %}<a class="btn btn-outline-secondary" href="{{ url_for('admin.audit') }}">Clear</a>{% endif %}
+        {% if filters.action or filters.user %}<a class="btn btn-outline-secondary" href="{{ url_for('admin.audit') }}">Clear filters</a>{% endif %}
       </div>
     </div>
+    <p class="form-text mb-0 mt-2"><span class="badge audit-action audit-action-security">Security</span> marks failed sign-ins, lockouts, denied access and rejected uploads.</p>
   </div>
 </form>
+
 <div class="card card-table">
   <div class="table-responsive">
-    <table class="table table-app align-middle">
+    <table class="table table-app align-middle audit-table kb-stack-xs">
       <thead>
         <tr>
           <th scope="col">When</th>
@@ -38,24 +83,44 @@
           <th scope="col">Action</th>
           <th scope="col" class="d-none d-md-table-cell">Entity</th>
           <th scope="col">Detail</th>
-          <th scope="col" class="d-none d-lg-table-cell">IP address</th>
+          <th scope="col" class="d-none d-xl-table-cell">IP address</th>
         </tr>
       </thead>
       <tbody>
         {% for entry in pagination.items %}
-        <tr>
-          <td class="text-nowrap">{{ entry.at|dt }}</td>
-          <td>{% if entry.username %}<span class="font-monospace">{{ entry.username }}</span>{% else %}<span class="text-body-secondary">anonymous</span>{% endif %}</td>
+        {% set detail = entry.detail if entry.detail is mapping else {} %}
+        {% set shown = (summary_keys|select("in", detail)|list)[:inline_limit] %}
+        {% if not shown %}{% set shown = (detail|dictsort|map(attribute=0)|list)[:inline_limit] %}{% endif %}
+        <tr{% if entry.action in security_actions %} class="row-security"{% endif %}>
+          <td class="text-nowrap small">{{ entry.at|dt }}</td>
+          <td>{% if entry.username %}<span class="font-monospace small">{{ entry.username }}</span>{% else %}<span class="text-body-secondary small">anonymous</span>{% endif %}</td>
           <td><span class="badge audit-action{% if entry.action in security_actions %} audit-action-security{% endif %}">{{ entry.action }}</span></td>
-          <td class="d-none d-md-table-cell text-nowrap">{% if entry.entity_type %}{{ entry.entity_type }}{% if entry.entity_id is not none %} #{{ entry.entity_id }}{% endif %}{% else %}<span class="text-body-secondary">—</span>{% endif %}</td>
+          <td class="d-none d-md-table-cell small text-nowrap">{{ entity(entry) }}</td>
           <td class="audit-detail">
-            {%- if entry.detail %}{% for key, value in entry.detail|dictsort %}<span class="audit-kv"><span class="audit-k">{{ key }}</span> {{ value }}</span>{% endfor %}
+            {%- if detail %}
+            <div class="audit-summary">
+              {%- for key in shown %}<span class="audit-kv"><span class="audit-k">{{ key_labels.get(key, key|humanize) }}</span> {{ audit_value(detail[key]) }}</span>{% endfor -%}
+            </div>
+            {%- if detail|length > shown|length or detail.values()|select("mapping")|list or detail.values()|reject("string")|select("iterable")|list %}
+            <details class="audit-more">
+              <summary>Full record ({{ detail|length }} field{{ "" if detail|length == 1 else "s" }})</summary>
+              <pre class="audit-json">{{ detail|pretty_json }}</pre>
+            </details>
+            {%- endif %}
+            {%- elif entry.detail is not none %}<span class="small">{{ entry.detail }}</span>
             {%- else %}<span class="text-body-secondary">—</span>{% endif -%}
+            <div class="d-md-none small mt-1">{{ entity(entry) }}</div>
           </td>
-          <td class="d-none d-lg-table-cell font-monospace small">{{ entry.ip_address or "—" }}</td>
+          <td class="d-none d-xl-table-cell font-monospace small">{{ entry.ip_address or "—" }}</td>
         </tr>
         {% else %}
-        <tr><td colspan="6">{{ ui.empty_state("clock-history", "No audit entries", "No entries match the selected filters." if (filters.action or filters.user) else "Actions such as sign-ins and imports will appear here.") }}</td></tr>
+        <tr><td colspan="6">
+          {% if filters.action or filters.user %}
+          {% call ui.empty_state("funnel", "No entries match the selected filters.", "Choose another action or user, or clear the filters.") %}<a class="btn btn-outline-secondary" href="{{ url_for('admin.audit') }}">Clear filters</a>{% endcall %}
+          {% else %}
+          {{ ui.empty_state("clock-history", "No audit entries yet", "Sign-ins, imports, uploads, reviews and denied requests are recorded here.") }}
+          {% endif %}
+        </td></tr>
         {% endfor %}
       </tbody>
     </table>

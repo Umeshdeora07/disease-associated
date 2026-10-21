@@ -4,19 +4,33 @@
 release, four rules (D1, D2, D5, D6 as in SPEC §6.1) and patients whose VCFs are ingested with
 :func:`ge_ehr.services.patient_records.ingest_vcf`, so alerts, notes and their provenance events
 are produced by the decision-support engine rather than written by hand.
+:func:`csrf_clinic` serves the same data from an app that enforces CSRF tokens.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+import re
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date
+
+from flask.testing import FlaskClient
+from werkzeug.test import TestResponse
 
 from ge_ehr.constants import GENES
 from ge_ehr.extensions import db
 from ge_ehr.models import KbRelease, Patient, RuleVersion, User
 from ge_ehr.services import patient_records
-from tests.factories import add_known_variant, make_release, make_rule_version, rule_definition
+from tests.conftest import build_app
+from tests.factories import (
+    TEST_PASSWORD,
+    add_known_variant,
+    make_release,
+    make_rule_version,
+    make_user,
+    rule_definition,
+)
 
 #: (chrom, pos, ref, alt) of the variants used by the clinic.
 HNF1A_P = ("12", 120978900, "G", "A")
@@ -188,3 +202,39 @@ def build_clinic(user: User | None = None) -> Clinic:
     return Clinic(
         release=release, rules=rules, carrier=carrier, gck_patient=gck_patient, vus_patient=vus_patient, plain=plain
     )
+
+
+_CSRF_TOKEN = re.compile(r'<input[^>]*\bname="csrf_token"[^>]*\bvalue="([^"]+)"')
+
+
+def csrf_token(response: TestResponse) -> str:
+    """The CSRF token of the first unprefixed CSRF-protected form on the page of ``response``."""
+    match = _CSRF_TOKEN.search(response.get_data(as_text=True))
+    assert match, "the page contains a CSRF-protected form"
+    return match.group(1)
+
+
+@contextmanager
+def csrf_clinic() -> Iterator[tuple[FlaskClient, Clinic]]:
+    """A clinician signed in to a fresh app that enforces CSRF tokens and holds :func:`build_clinic`.
+
+    Independent of the suite's ``app`` fixture: the app has its own in-memory database and pushes
+    its own application context for the duration of the block.
+    """
+    application = build_app({"WTF_CSRF_ENABLED": True})
+    with application.app_context():
+        db.create_all()
+        try:
+            user = make_user("csrf.clinician", role="clinician", full_name="Dr. C. Token")
+            clinic = build_clinic(user)
+            client = application.test_client()
+            token = csrf_token(client.get("/login"))
+            response = client.post(
+                "/login", data={"username": user.username, "password": TEST_PASSWORD, "csrf_token": token}
+            )
+            assert response.status_code == 302, "login with a CSRF token succeeds"
+            yield client, clinic
+        finally:
+            db.session.remove()
+            db.drop_all()
+            db.engine.dispose()

@@ -31,7 +31,7 @@
       <span class="rule-code" aria-hidden="true">{{ card.rule.code }}</span>
       <div class="rule-heading">
         <h2 class="rule-title" id="rule-{{ card.rule.code }}-title"><span class="visually-hidden">{{ card.rule.code }}: </span>{{ version.title }}</h2>
-        <div class="rule-meta"><span class="badge badge-version">v{{ version.version }}</span><span>{{ version.kind|humanize }}</span>{% if version.rule_set_label %}<span>{{ version.rule_set_label }}</span>{% endif %}</div>
+        <div class="rule-meta"><span class="badge badge-version">v{{ version.version }}</span><span>{{ version.kind|humanize }}</span>{% if version.rule_set_label %}<span>Rule set {{ version.rule_set_label }}</span>{% endif %}</div>
       </div>
       <div class="rule-severity">{{ ui.severity_badge(version.severity) }}</div>
     </div>

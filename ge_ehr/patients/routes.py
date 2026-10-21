@@ -287,14 +287,15 @@ def stop_medication(patient_id: int, medication_id: int) -> Response:
 
 
 def _upload_summary(upload: GenomicUpload, result: ReconcileResult | None) -> str:
+    """Flash message of an accepted upload: record counts and, for clinical roles, the findings raised."""
     parts = [
         f"VCF {upload.filename} accepted: {_plural(upload.panel_variants, 'panel variant')}",
-        f"{upload.off_panel_skipped} off-panel record{'s' if upload.off_panel_skipped != 1 else ''} skipped",
+        f"{_plural(upload.off_panel_skipped, 'off-panel record')} skipped",
     ]
     if upload.non_pass_skipped:
-        parts.append(f"{upload.non_pass_skipped} non-PASS skipped")
+        parts.append(f"{_plural(upload.non_pass_skipped, 'non-PASS record')} skipped")
     if upload.ref_calls_skipped:
-        parts.append(f"{upload.ref_calls_skipped} reference call{'s' if upload.ref_calls_skipped != 1 else ''} skipped")
+        parts.append(f"{_plural(upload.ref_calls_skipped, 'reference call')} skipped")
     message = ", ".join(parts) + "."
     if result is None:
         return message + " No panel variant was found, so there was nothing to evaluate."

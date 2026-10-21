@@ -29,8 +29,8 @@ INBOX_STATUSES: dict[str, tuple[str, ...]] = {
     "all": C.ALERT_STATUSES,
 }
 INBOX_STATUS_LABELS: dict[str, str] = {
-    "current": "Current (active or reviewed)",
-    "active": "Active — awaiting review",
+    "current": "Current",
+    "active": "Awaiting review",
     "reviewed": "Reviewed",
     "superseded": "Superseded",
     "all": "All statuses",
