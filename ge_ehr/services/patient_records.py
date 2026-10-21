@@ -51,7 +51,6 @@ from ..models import (
     User,
     VariantKey,
     utc_today,
-    utcnow,
 )
 from ..security import audit
 from . import alerting, classification, vcf_parser
@@ -87,7 +86,6 @@ EARLIEST_BIRTH_DATE = date(1900, 1, 1)
 # Age at diagnosis above ~125 years is certainly a data-entry error.
 MAX_AGE_AT_DIAGNOSIS_MONTHS = 1_500
 DEFAULT_UPLOAD_FILENAME = "upload.vcf"
-DEFAULT_PATIENT_VCF_MAX_BYTES = 20 * 1024 * 1024
 
 # Medical record numbers: letters and digits, optionally separated by . _ / - (e.g. DEMO-0001).
 _MRN_PATTERN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._/-]*[A-Za-z0-9])?")
@@ -131,7 +129,7 @@ def _notes(value: Any, label: str = "Notes") -> str | None:
     if value is None:
         return None
     if not isinstance(value, str):
-        raise ValueError(f"{label} must be text.")  # noqa: TRY004 — form errors are ValueErrors (§6.4)
+        raise ValueError(f"{label} must be text.")
     text = value.strip()
     if len(text) > NOTES_MAX_LENGTH:
         raise ValueError(f"{label} must be at most {NOTES_MAX_LENGTH:,} characters (got {len(text):,}).")
@@ -184,14 +182,14 @@ def _months(value: Any, label: str) -> int | None:
     if value is None or (isinstance(value, str) and not value.strip()):
         return None
     if isinstance(value, bool):
-        raise ValueError(f"{label} must be a whole number of months.")  # noqa: TRY004 — form error
+        raise ValueError(f"{label} must be a whole number of months.")
     if isinstance(value, str):
         text = value.strip()
         if not text.isdigit():
             raise ValueError(f"{label} must be a whole number of months, got {value!r}.")
         value = int(text)
     if not isinstance(value, int):
-        raise ValueError(f"{label} must be a whole number of months, got {value!r}.")  # noqa: TRY004
+        raise ValueError(f"{label} must be a whole number of months, got {value!r}.")
     if value < 0:
         raise ValueError(f"{label} cannot be negative.")
     if value > MAX_AGE_AT_DIAGNOSIS_MONTHS:
@@ -545,7 +543,7 @@ def _megabytes(size: int) -> str:
 
 
 def _check_upload_size(size: int) -> None:
-    limit = int(current_app.config.get("PATIENT_VCF_MAX_BYTES", DEFAULT_PATIENT_VCF_MAX_BYTES))
+    limit = int(current_app.config["PATIENT_VCF_MAX_BYTES"])
     if size > limit:
         raise VcfError(
             f"The file is {_megabytes(size)}; patient VCFs may be at most {_megabytes(limit)}. "
@@ -576,7 +574,6 @@ def ingest_vcf(
         sha256=hashlib.sha256(data).hexdigest(),
         size_bytes=len(data),
         uploaded_by=user,
-        uploaded_at=utcnow(),
     )
     try:
         _check_upload_size(len(data))
@@ -651,26 +648,25 @@ def ingest_vcf(
 def _merge_variants(
     patient: Patient, upload: GenomicUpload, variants: Sequence[ParsedVariant]
 ) -> tuple[list[PatientVariant], list[PatientVariant]]:
-    """Upsert the patient's variants from one upload; returns (new, updated) PatientVariants.
+    """Upsert the patient's variants from one upload; returns the (new, updated) PatientVariants.
 
     New variants get their first classification under the current release (SPEC §7.1
     bookkeeping): ``current_classification = reported_classification`` and
     ``classification_release_id`` = that release (``NC`` / NULL while no release is current).
+    The parser reports each key once (the first record of a repeated key, with a warning).
     """
-    if not variants:
+    reported = {VariantKey.normalize(v.chrom, v.pos, v.ref, v.alt): v for v in variants}
+    if not reported:
         return [], []
-    keys = {
-        (parsed.chrom, parsed.pos, parsed.ref, parsed.alt): key
-        for parsed, key in zip(variants, _variant_keys(variants), strict=True)
-    }
+    keys = _variant_keys({identity: parsed.gene for identity, parsed in reported.items()})
     statement = select(PatientVariant).where(PatientVariant.patient_id == patient.id)
     existing = {variant.variant_key_id: variant for variant in db.session.scalars(statement)}
     release = KbRelease.current()
     known = classification.classify_keys(release, {key.id for key in keys.values()} - existing.keys())
     added: list[PatientVariant] = []
     updated: list[PatientVariant] = []
-    for parsed in variants:
-        key = keys[(parsed.chrom, parsed.pos, parsed.ref, parsed.alt)]
+    for identity, parsed in reported.items():
+        key = keys[identity]
         variant = existing.get(key.id)
         if variant is None:
             cls = known[key.id].classification
@@ -685,7 +681,6 @@ def _merge_variants(
                 classification_release=release,
             )
             db.session.add(variant)
-            existing[key.id] = variant
             added.append(variant)
         else:
             # Latest upload wins: zygosity and upload follow the most recent report of the variant.
@@ -697,14 +692,12 @@ def _merge_variants(
     return added, updated
 
 
-def _variant_keys(variants: Sequence[ParsedVariant]) -> list[VariantKey]:
-    """Bulk get-or-create of the VariantKeys of an upload, in the order of ``variants``.
+def _variant_keys(genes: Mapping[tuple[str, int, str, str], str]) -> dict[tuple[str, int, str, str], VariantKey]:
+    """Bulk get-or-create of VariantKeys for normalised identities (chrom, pos, ref, alt) → gene.
 
     Existing keys are found with one query per chunk of positions; missing ones are created with
     a single flush. An existing key without a gene gets the panel gene from the upload.
     """
-    identities = [VariantKey.normalize(v.chrom, v.pos, v.ref, v.alt) for v in variants]
-    genes = {identity: variant.gene for identity, variant in zip(identities, variants, strict=True)}
     chroms = sorted({identity[0] for identity in genes})
     found: dict[tuple[str, int, str, str], VariantKey] = {}
     for chunk in batched(sorted({identity[1] for identity in genes}), classification.IN_CLAUSE_CHUNK):
@@ -723,4 +716,4 @@ def _variant_keys(variants: Sequence[ParsedVariant]) -> list[VariantKey]:
         db.session.add_all(missing)
         db.session.flush()
         found.update({(key.chrom, key.pos, key.ref, key.alt): key for key in missing})
-    return [found[identity] for identity in identities]
+    return found

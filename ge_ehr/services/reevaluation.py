@@ -3,29 +3,31 @@
 Entry points (each logs one :class:`~ge_ehr.models.ReevaluationRun`, flushes, never commits):
 
 * :func:`activate_release` — Algorithm 2. ``strategy="change_driven"`` compares the new release
-  with the current one **only for variant keys stored for some patient** (``Δ``) and reconciles
-  only the carriers of changed keys, restricted to those keys; ``strategy="full"`` (evaluation
+  with the current one **only for variant keys stored for some patient** (Δ) and reconciles only
+  the carriers of changed keys, restricted to those keys; ``strategy="full"`` (evaluation
   strategy 2) reconciles every patient with full scope. Both apply the same change-category
-  semantics (paper Table IV) and reach the same alert state:
+  semantics (paper Table IV) and reach the same set of current alerts:
 
   ========================  ==========================================================
-  upgrade                   created alerts ``is_reclassified``, priority ``high``,
-                            ``notify`` unless severity ``info``; superseded findings
-                            (e.g. the D6 VUS monitoring alert) reason ``reclassified``
+  upgrade                   created findings ``is_reclassified``; created alerts get
+                            priority ``high`` and ``notify`` unless severity ``info``;
+                            superseded findings (e.g. the D6 VUS monitoring alert)
+                            reason ``reclassified``, no notice
   downgrade                 superseded reason ``downgrade``; one ReviewNotice per
-                            (patient, variant, run) when a non-info alert was superseded;
-                            created findings (e.g. D6) are silent
-  within_actionable /       still-firing alerts confirmed under the new release (no
-  within_non_actionable     notification); findings that stop applying superseded
-                            silently (reason ``reclassified``); findings that newly apply
-                            (mechanism-only change) notify as usual (§6.3)
+                            (patient, variant, run) linking the superseded alerts when one
+                            of them has severity ≠ info; created findings (e.g. D6) silent
+  within_actionable /       still-firing findings confirmed under the new release (no
+  within_non_actionable     notification); findings that stop applying superseded silently
+                            (reason ``reclassified``); findings that newly apply (e.g. a
+                            mechanism-only change) notify as usual (§6.3)
   ========================  ==========================================================
 
-  A key absent from the new release although it was listed before ("removed from ClinVar")
-  is not classified (NC) and its superseded findings get reason ``variant_removed``.
+  A key that is absent from the new release although the old one listed it ("removed from
+  ClinVar") is not classified (NC); its category follows from the classes (LP → NC is a
+  downgrade) and its superseded findings get the more specific reason ``variant_removed``.
 
   The **first activation** (no current release) is an initial classification, not a
-  reclassification: alerts are not flagged, no notices, ``summary.initial = true``.
+  reclassification: §6.3 defaults for created alerts, no notices, ``summary["initial"] = True``.
 
 * :func:`apply_rule_set` — rule revision (§7.3): imports the rule set, then re-runs every revised
   rule for the carriers of its old and new genes (``strategy="full"``: every patient).
@@ -33,24 +35,24 @@ Entry points (each logs one :class:`~ge_ehr.models.ReevaluationRun`, flushes, ne
 * :func:`alerts_as_of` / :func:`provenance_as_of` — point-in-time view (§7.5).
 * :func:`release_history` — activated releases in activation order.
 
-**PatientVariant bookkeeping.** A variant first classified against a release
-(``classification_release_id IS NULL``) gets ``reported_classification =
-current_classification`` = its class and no reclassification count. Afterwards, every class change
-caused by an activation increments ``reclassified_count`` and sets ``last_reclassified_at`` /
-``last_reclassified_run_id`` (this drives FHIR ``amended``). After every activation all
-PatientVariants point to the new release (``classification_release_id``): unchanged keys were
-compared and found identical, so the new release backs their classification too (one bulk
-UPDATE; no record is re-evaluated for it).
+**PatientVariant bookkeeping (§7.1).** A variant first classified against a release
+(``classification_release_id IS NULL``) gets ``reported_classification = current_classification``
+= its class and no reclassification count. Afterwards every class change increments
+``reclassified_count`` and sets ``last_reclassified_at`` / ``last_reclassified_run_id`` (FHIR
+``amended``). After an activation every PatientVariant points to the new release: unchanged keys
+were compared and found identical, so the new release backs their class too (one bulk UPDATE; no
+record is re-evaluated for it). :func:`full_recompute` applies the same bookkeeping, so it also
+repairs PatientVariants whose stored class had drifted from the current release.
 
 **Re-activation.** Re-activating the current release raises :class:`ValueError`. Activating an
 older, previously activated release is a *new* activation: it is compared with the current
-release like any other and receives a new ``sequence`` (the release keeps only its latest
-sequence; earlier activations remain visible as runs).
+release like any other and receives the next ``sequence`` (a release keeps only its latest
+sequence; every activation remains visible as a run).
 
-**Failure handling (§7.6).** Invalid input (unknown strategy, a release that is already current or
-not stored, an invalid rule set) raises before any run is recorded. Any other exception rolls the
-session back, records a ``failed`` run with the error text in a fresh transaction (committed) and
-is re-raised; the release stays non-current and no alert changes.
+**Failure handling (§7.6).** Invalid input (unknown strategy or trigger, a release that is already
+current or not stored, an invalid rule set) raises before any run is recorded. Any other exception
+rolls the session back, records a ``failed`` run with the error text in a fresh, committed
+transaction and is re-raised; the release stays non-current and no alert changes.
 
 Owned by the Reeval work package.
 """
@@ -67,7 +69,7 @@ from datetime import UTC, datetime
 from itertools import batched
 from typing import Any
 
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import Select, func, or_, select, update
 from sqlalchemy.orm import joinedload, selectinload
 
 from .. import constants as C
@@ -98,10 +100,19 @@ logger = logging.getLogger(__name__)
 
 #: Strategies of :func:`activate_release` and :func:`apply_rule_set`.
 STRATEGIES: tuple[str, ...] = ("change_driven", "full")
-#: Patients loaded (with diagnosis, medications and variants) per batch.
+#: Patients loaded (with diagnosis and medications) per query.
 PATIENT_BATCH = 500
 #: Changes listed in ``ReevaluationRun.summary["changes"]`` (all are stored as VariantChange rows).
 MAX_SUMMARY_CHANGES = 1_000
+#: Outcome counters broken down per change category (activation) or per rule code (rule runs).
+OUTCOME_COUNTERS: tuple[str, ...] = (
+    "alerts_created",
+    "notes_created",
+    "alerts_superseded",
+    "alerts_confirmed",
+    "review_notices",
+    "notifications",
+)
 
 # Superseded reason of the findings of a changed key, by change category.
 _CATEGORY_REASONS: dict[str, str] = {
@@ -118,12 +129,12 @@ _REVIEW_ADVICE = (
     "Review any treatment change made on the basis of this alert; GE-EHR never reverses therapy automatically."
 )
 
-# Applies the notification / notice semantics of a run to one patient's reconciliation results.
+# Applies the flag / notification / notice semantics of a run to one patient's reconciliation.
 _Semantics = Callable[[Patient, Sequence[ReconcileResult], Sequence[ClassifiedVariant]], None]
 
 
 # ---------------------------------------------------------------------------
-# Run bookkeeping
+# Run bookkeeping (SPEC §7.4, §7.6)
 # ---------------------------------------------------------------------------
 
 
@@ -140,20 +151,22 @@ class _RunInfo:
     clock: float
     rule_change: list[dict[str, Any]] | None = None
 
+    @classmethod
+    def begin(
+        cls, trigger: str, strategy: str, old: KbRelease | None, new: KbRelease | None, user: User | None
+    ) -> _RunInfo:
+        return cls(
+            trigger=trigger,
+            strategy=strategy,
+            old_release_id=old.id if old is not None else None,
+            new_release_id=new.id if new is not None else None,
+            user_id=user.id if user is not None else None,
+            started_at=utcnow(),
+            clock=time.perf_counter(),
+        )
+
     def elapsed_ms(self) -> float:
         return (time.perf_counter() - self.clock) * 1000
-
-
-def _run_info(trigger: str, strategy: str, old: KbRelease | None, new: KbRelease | None, user: User | None) -> _RunInfo:
-    return _RunInfo(
-        trigger=trigger,
-        strategy=strategy,
-        old_release_id=old.id if old is not None else None,
-        new_release_id=new.id if new is not None else None,
-        user_id=user.id if user is not None else None,
-        started_at=utcnow(),
-        clock=time.perf_counter(),
-    )
 
 
 def _start_run(info: _RunInfo, user: User | None) -> ReevaluationRun:
@@ -191,6 +204,7 @@ def _run_detail(run: ReevaluationRun) -> dict[str, Any]:
 
 
 def _finish_run(run: ReevaluationRun, engine: _Engine, info: _RunInfo, summary: dict[str, Any]) -> None:
+    """Store the counters and summary, mark the run successful and audit ``reevaluation_run``."""
     for name in RUN_COUNTERS:
         setattr(run, name, engine.counts[name])
     run.summary = summary
@@ -219,8 +233,8 @@ def _finish_run(run: ReevaluationRun, engine: _Engine, info: _RunInfo, summary: 
     )
 
 
-def _existing_id(model: type[KbRelease | User], object_id: int | None) -> int | None:
-    """``object_id`` if the row still exists (it may have been rolled back), else None."""
+def _existing_id(model: type[KbRelease] | type[User], object_id: int | None) -> int | None:
+    """``object_id`` if the row still exists (the rollback may have discarded it), else None."""
     return object_id if object_id is not None and db.session.get(model, object_id) is not None else None
 
 
@@ -234,6 +248,7 @@ def _record_failed_run(info: _RunInfo, exc: Exception) -> None:
         run = ReevaluationRun(
             trigger=info.trigger,
             strategy=info.strategy,
+            # A release imported in the rolled-back transaction no longer exists.
             old_release_id=_existing_id(KbRelease, info.old_release_id),
             new_release_id=_existing_id(KbRelease, info.new_release_id),
             rule_change=info.rule_change,
@@ -278,12 +293,16 @@ def _check_strategy(strategy: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Engine: reconciliation, counters, notices
+# Engine: reconciliation, bookkeeping, counters, notices
 # ---------------------------------------------------------------------------
 
 
 class _Engine:
-    """Reconciles patients for one run and keeps its counters and per-group outcome breakdown."""
+    """Reconciles patients for one run and keeps its counters and per-group outcome breakdown.
+
+    ``group_of`` maps an alert to the group its outcome is counted under in the summary (the
+    change category of its variant, or its rule code); None counts it in the totals only.
+    """
 
     def __init__(
         self,
@@ -291,22 +310,48 @@ class _Engine:
         release: KbRelease | None,
         *,
         user: User | None,
-        group_of: Callable[[Alert], str | None] = lambda _alert: None,
+        group_of: Callable[[Alert], str | None],
     ) -> None:
         self.run = run
         self.release = release
         self.user = user
         self.now = run.started_at
+        self.group_of = group_of
         self.rules = alerting.load_current_rules()
         # Keep the current rule versions in the identity map: confirming an alert under a new rule
         # version looks the version up by id, which must not cost a query per alert.
         self._rule_versions = RuleVersion.current_versions()
-        self.group_of = group_of
         self.counts: Counter[str] = Counter()
         self.groups: defaultdict[str, Counter[str]] = defaultdict(Counter)
         self.reasons: Counter[str] = Counter()
-        self.carrier_patients: set[int] = set()
-        self.carriers_by_key: Counter[int] = Counter()
+        self.carriers_by_key: defaultdict[int, set[int]] = defaultdict(set)
+        self.carriers_by_gene: defaultdict[str, set[int]] = defaultdict(set)
+
+    def carrier(self, patient_id: int, variant_key_id: int, gene: str) -> None:
+        """Note that ``patient_id`` carries an affected key (changed key or revised rule's gene)."""
+        self.carriers_by_key[variant_key_id].add(patient_id)
+        self.carriers_by_gene[gene].add(patient_id)
+
+    @property
+    def carriers_affected(self) -> int:
+        return len(set().union(*self.carriers_by_key.values()))
+
+    def classify(self, variant: PatientVariant, new_class: str) -> None:
+        """PatientVariant classification bookkeeping under the run's (non-None) release (SPEC §7.1).
+
+        A variant whose class stays the same is not touched (no per-row UPDATE);
+        :func:`_point_variants_to_release` re-points those to the release in bulk.
+        """
+        if variant.classification_release_id is None:
+            variant.reported_classification = new_class  # first classification: not a reclassification
+        elif variant.current_classification == new_class:
+            return
+        else:
+            variant.reclassified_count = (variant.reclassified_count or 0) + 1
+            variant.last_reclassified_at = self.now
+            variant.last_reclassified_run = self.run
+        variant.current_classification = new_class
+        variant.classification_release = self.release
 
     def reconcile(
         self,
@@ -374,24 +419,12 @@ class _Engine:
         self._count(alerts[0], "notifications")
         return notice
 
-    def carrier(self, patient_id: int, variant_key_id: int | None = None) -> None:
-        self.carrier_patients.add(patient_id)
-        if variant_key_id is not None:
-            self.carriers_by_key[variant_key_id] += 1
-
     def outcome_counts(self, group: str) -> dict[str, int]:
         counts = self.groups.get(group, Counter())
-        return {
-            name: counts[name]
-            for name in (
-                "alerts_created",
-                "notes_created",
-                "alerts_superseded",
-                "alerts_confirmed",
-                "review_notices",
-                "notifications",
-            )
-        }
+        return {name: counts[name] for name in OUTCOME_COUNTERS}
+
+    def superseded_by_reason(self) -> dict[str, int]:
+        return dict(sorted(self.reasons.items()))
 
 
 def _classified(variant: PatientVariant, known: KnownClass) -> ClassifiedVariant:
@@ -409,7 +442,7 @@ def _classified(variant: PatientVariant, known: KnownClass) -> ClassifiedVariant
 
 
 def _patient_batches(patient_ids: Iterable[int]) -> Iterator[list[Patient]]:
-    """Patients with diagnosis and medications, :data:`PATIENT_BATCH` per query, ordered by id."""
+    """Patients with diagnosis and medications, :data:`PATIENT_BATCH` per query, in id order."""
     for chunk in batched(patient_ids, PATIENT_BATCH):
         statement = (
             select(Patient)
@@ -420,30 +453,28 @@ def _patient_batches(patient_ids: Iterable[int]) -> Iterator[list[Patient]]:
         yield list(db.session.scalars(statement))
 
 
-def _group_by_patient(statement: Any) -> dict[int, list[PatientVariant]]:
-    grouped: dict[int, list[PatientVariant]] = defaultdict(list)
-    for variant in db.session.scalars(statement):
-        grouped[variant.patient_id].append(variant)
-    return grouped
-
-
-def _variants_query() -> Any:
+def _variants_query() -> Select[tuple[PatientVariant]]:
     return select(PatientVariant).options(joinedload(PatientVariant.variant_key)).order_by(PatientVariant.id)
 
 
+def _group_by_patient(statements: Iterable[Select[tuple[PatientVariant]]]) -> dict[int, list[PatientVariant]]:
+    grouped: defaultdict[int, list[PatientVariant]] = defaultdict(list)
+    for statement in statements:
+        for variant in db.session.scalars(statement):
+            grouped[variant.patient_id].append(variant)
+    return grouped
+
+
 def _variants_of_patients(patient_ids: Sequence[int]) -> dict[int, list[PatientVariant]]:
-    return _group_by_patient(_variants_query().where(PatientVariant.patient_id.in_(patient_ids)))
+    return _group_by_patient([_variants_query().where(PatientVariant.patient_id.in_(patient_ids))])
 
 
 def _variants_with_keys(key_ids: Iterable[int]) -> dict[int, list[PatientVariant]]:
-    """Carriers of the given keys, one query per :data:`IN_CLAUSE_CHUNK` keys."""
-    grouped: dict[int, list[PatientVariant]] = defaultdict(list)
-    for chunk in batched(sorted(key_ids), IN_CLAUSE_CHUNK):
-        for patient_id, variants in _group_by_patient(
-            _variants_query().where(PatientVariant.variant_key_id.in_(chunk))
-        ).items():
-            grouped[patient_id].extend(variants)
-    return grouped
+    """All carriers of the given keys, bulk-loaded (one query per :data:`IN_CLAUSE_CHUNK` keys)."""
+    return _group_by_patient(
+        _variants_query().where(PatientVariant.variant_key_id.in_(chunk))
+        for chunk in batched(sorted(key_ids), IN_CLAUSE_CHUNK)
+    )
 
 
 def _reconcile_grouped(
@@ -454,16 +485,15 @@ def _reconcile_grouped(
     *,
     trigger: str,
     full_scope: bool,
-    default_reason: str = _DEFAULT_REASON,
 ) -> list[ReconcileResult]:
-    """Reconcile ``patient`` once per superseded reason (reasons partition the variant keys).
+    """Reconcile ``patient`` once per superseded reason (``groups`` partitions its variant keys).
 
     Findings are per (rule, variant), so reconciling disjoint key sets separately gives the same
-    result as one call over their union. With ``full_scope`` and at most one reason the patient
-    is reconciled once without a key restriction (``default_reason`` when it has no variant).
+    result as one call over their union. With ``full_scope`` and a single reason the patient is
+    reconciled once without a key restriction (also when it has no variant at all).
     """
     if full_scope and len(groups) <= 1:
-        reason = next(iter(groups), default_reason)
+        reason = next(iter(groups), _DEFAULT_REASON)
         return [engine.reconcile(patient, classified, trigger=trigger, reason=reason)]
     return [
         engine.reconcile(patient, classified, trigger=trigger, reason=reason, keys=keys)
@@ -471,14 +501,53 @@ def _reconcile_grouped(
     ]
 
 
+def _reevaluate_all_patients(
+    engine: _Engine,
+    *,
+    trigger: str,
+    apply: _Semantics,
+    reason_of: Callable[[int], str],
+    carrier_gene: Callable[[PatientVariant], str | None],
+    sync_classifications: bool,
+) -> None:
+    """Full strategy: every patient, every variant classified under ``engine.release``.
+
+    ``reason_of`` gives the superseded reason per variant key; ``carrier_gene`` returns the gene
+    under which a variant makes its patient an affected carrier (None: not affected);
+    ``sync_classifications`` applies the PatientVariant bookkeeping to every variant.
+    """
+    patient_ids = db.session.scalars(select(Patient.id).order_by(Patient.id)).all()
+    for patients in _patient_batches(patient_ids):
+        variants_by_patient = _variants_of_patients([patient.id for patient in patients])
+        known = classification.classify_keys(
+            engine.release,
+            {variant.variant_key_id for variants in variants_by_patient.values() for variant in variants},
+        )
+        for patient in patients:
+            classified: list[ClassifiedVariant] = []
+            groups: defaultdict[str, set[int]] = defaultdict(set)
+            for variant in variants_by_patient.get(patient.id, []):
+                key_class = known[variant.variant_key_id]
+                if sync_classifications:
+                    engine.classify(variant, key_class.classification)
+                gene = carrier_gene(variant)
+                if gene is not None:
+                    engine.carrier(patient.id, variant.variant_key_id, gene)
+                groups[reason_of(variant.variant_key_id)].add(variant.variant_key_id)
+                classified.append(_classified(variant, key_class))
+            results = _reconcile_grouped(engine, patient, classified, groups, trigger=trigger, full_scope=True)
+            apply(patient, results, classified)
+            engine.record(results)
+
+
 # ---------------------------------------------------------------------------
-# Release activation (Algorithm 2)
+# Release activation (Algorithm 2, SPEC §7.1 / §7.2)
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class _Change:
-    """One element of Δ with its classification under the new release."""
+    """One element of Δ with its classification under the new release and its display data."""
 
     key: KeyChange
     known: KnownClass
@@ -491,7 +560,7 @@ class _Change:
 
     @property
     def removed(self) -> bool:
-        """The key is not listed in the new release (e.g. removed from ClinVar) — not classified."""
+        """The key is not listed in the new release (e.g. removed from ClinVar), so it is NC."""
         return self.known.known_variant_id is None
 
     @property
@@ -500,7 +569,7 @@ class _Change:
 
 
 def _stored_key_ids() -> set[int]:
-    """``V_obs``: distinct variant keys of all PatientVariants."""
+    """``V_obs``: the distinct variant keys of all PatientVariants."""
     return set(db.session.scalars(select(PatientVariant.variant_key_id).distinct()))
 
 
@@ -509,36 +578,40 @@ def _release_changes(old: KbRelease | None, new: KbRelease, stored: set[int]) ->
     delta = clinvar.diff_releases(old, new, stored)
     key_ids = [change.variant_key_id for change in delta]
     known = classification.classify_keys(new, key_ids)
-    keys: dict[int, tuple[str, str | None]] = {}
+    keys: dict[int, VariantKey] = {}
     for chunk in batched(key_ids, IN_CLAUSE_CHUNK):
-        statement = select(VariantKey).where(VariantKey.id.in_(chunk))
-        keys.update({key.id: (key.label, key.gene) for key in db.session.scalars(statement)})
+        keys.update((key.id, key) for key in db.session.scalars(select(VariantKey).where(VariantKey.id.in_(chunk))))
     return {
         change.variant_key_id: _Change(
             key=change,
             known=known[change.variant_key_id],
-            label=keys[change.variant_key_id][0],
-            gene=change.gene or keys[change.variant_key_id][1] or "",
+            label=keys[change.variant_key_id].label,
+            gene=change.gene or keys[change.variant_key_id].gene or "",
         )
         for change in delta
     }
 
 
-def _reclassify(engine: _Engine, variant: PatientVariant, change: _Change) -> None:
-    """PatientVariant bookkeeping for a changed key (SPEC §7.1)."""
-    new_class = change.key.new_class
-    if variant.classification_release_id is None:
-        variant.reported_classification = variant.current_classification = new_class
-    elif variant.current_classification != new_class:
-        variant.current_classification = new_class
-        variant.reclassified_count = (variant.reclassified_count or 0) + 1
-        variant.last_reclassified_at = engine.now
-        variant.last_reclassified_run = engine.run
-    variant.classification_release = engine.release
+def _rule_codes_text(alerts: Iterable[Alert]) -> str:
+    return ", ".join(sorted({alert.rule_code for alert in alerts}, key=rule_code_sort_key))
+
+
+def _downgrade_message(change: _Change, alerts: Sequence[Alert], release: KbRelease) -> str:
+    if change.removed:
+        what = (
+            f"{change.gene} variant {change.label} ({change.key.old_class}) is no longer listed in {release.label} "
+            "and is now not classified (NC)"
+        )
+    else:
+        what = (
+            f"{change.gene} variant {change.label} was downgraded from {change.key.old_class} to "
+            f"{change.key.new_class} in {release.label}"
+        )
+    return f"{what}; alert(s) {_rule_codes_text(alerts)} superseded. {_REVIEW_ADVICE}"
 
 
 def _release_semantics(engine: _Engine, changes: Mapping[int, _Change], *, initial: bool) -> _Semantics:
-    """Flags, notifications and review notices of a release activation (category semantics)."""
+    """Flags, notifications and review notices of a release activation (change-category semantics)."""
 
     def apply(patient: Patient, results: Sequence[ReconcileResult], _classified: Sequence[ClassifiedVariant]) -> None:
         if initial:
@@ -560,8 +633,7 @@ def _release_semantics(engine: _Engine, changes: Mapping[int, _Change], *, initi
                 change = changes.get(alert.variant_key_id)
                 if change is not None and change.category == "downgrade" and alert.kind == "alert":
                     downgraded[alert.variant_key_id].append(alert)
-        for key_id in sorted(downgraded):
-            alerts = downgraded[key_id]
+        for key_id, alerts in sorted(downgraded.items()):
             if any(alert.severity != "info" for alert in alerts):
                 change = changes[key_id]
                 engine.notice(
@@ -576,26 +648,8 @@ def _release_semantics(engine: _Engine, changes: Mapping[int, _Change], *, initi
     return apply
 
 
-def _rule_codes_text(alerts: Iterable[Alert]) -> str:
-    return ", ".join(sorted({alert.rule_code for alert in alerts}, key=rule_code_sort_key))
-
-
-def _downgrade_message(change: _Change, alerts: Sequence[Alert], release: KbRelease) -> str:
-    if change.removed:
-        what = (
-            f"{change.gene} variant {change.label} ({change.key.old_class}) is no longer listed in {release.label} "
-            "and is now not classified (NC)"
-        )
-    else:
-        what = (
-            f"{change.gene} variant {change.label} was downgraded from {change.key.old_class} to "
-            f"{change.key.new_class} in {release.label}"
-        )
-    return f"{what}; alert(s) {_rule_codes_text(alerts)} superseded. {_REVIEW_ADVICE}"
-
-
 def _reevaluate_changed_carriers(engine: _Engine, changes: Mapping[int, _Change], apply: _Semantics) -> None:
-    """Change-driven: only carriers of changed keys, only those keys (bulk-loaded carriers)."""
+    """Change-driven: only the carriers of changed keys, restricted to those keys."""
     carriers = _variants_with_keys(changes)
     for patients in _patient_batches(sorted(carriers)):
         for patient in patients:
@@ -603,8 +657,8 @@ def _reevaluate_changed_carriers(engine: _Engine, changes: Mapping[int, _Change]
             groups: defaultdict[str, set[int]] = defaultdict(set)
             for variant in carriers[patient.id]:
                 change = changes[variant.variant_key_id]
-                _reclassify(engine, variant, change)
-                engine.carrier(patient.id, variant.variant_key_id)
+                engine.classify(variant, change.key.new_class)
+                engine.carrier(patient.id, variant.variant_key_id, change.gene)
                 classified.append(_classified(variant, change.known))
                 groups[change.reason].add(variant.variant_key_id)
             results = _reconcile_grouped(
@@ -614,62 +668,17 @@ def _reevaluate_changed_carriers(engine: _Engine, changes: Mapping[int, _Change]
             engine.record(results)
 
 
-def _reevaluate_all_patients(
-    engine: _Engine,
-    *,
-    trigger: str,
-    apply: _Semantics,
-    changes: Mapping[int, _Change] | None = None,
-    default_reason: str = _DEFAULT_REASON,
-    carrier_genes: frozenset[str] | None = None,
-) -> None:
-    """Full strategy: every patient, every variant classified under ``engine.release``.
+def _point_variants_to_release(engine: _Engine, release: KbRelease) -> None:
+    """Complete the PatientVariant bookkeeping after reconciliation.
 
-    ``changes`` (release activation) drive PatientVariant bookkeeping and the superseded reason
-    of their keys; other keys use ``default_reason``. ``carrier_genes`` (rule revision) marks
-    patients carrying a variant in those genes as carriers.
+    Variants never classified before get their first classification under ``release``; then every
+    variant points to ``release`` (one bulk UPDATE): the class of an unchanged key is backed by
+    that release as well.
     """
-    changes = changes or {}
-    patient_ids = db.session.scalars(select(Patient.id).order_by(Patient.id)).all()
-    for patients in _patient_batches(patient_ids):
-        variants_by_patient = _variants_of_patients([patient.id for patient in patients])
-        known = classification.classify_keys(
-            engine.release,
-            {variant.variant_key_id for variants in variants_by_patient.values() for variant in variants},
-        )
-        for patient in patients:
-            variants = variants_by_patient.get(patient.id, [])
-            classified: list[ClassifiedVariant] = []
-            groups: defaultdict[str, set[int]] = defaultdict(set)
-            for variant in variants:
-                change = changes.get(variant.variant_key_id)
-                if change is not None:
-                    _reclassify(engine, variant, change)
-                    engine.carrier(patient.id, variant.variant_key_id)
-                    groups[change.reason].add(variant.variant_key_id)
-                else:
-                    groups[default_reason].add(variant.variant_key_id)
-                classified.append(_classified(variant, known[variant.variant_key_id]))
-            if carrier_genes is not None and any(variant.gene in carrier_genes for variant in classified):
-                engine.carrier(patient.id)
-            results = _reconcile_grouped(
-                engine, patient, classified, groups, trigger=trigger, full_scope=True, default_reason=default_reason
-            )
-            apply(patient, results, classified)
-            engine.record(results)
-
-
-def _complete_classification_bookkeeping(release: KbRelease) -> None:
-    """After the changed keys: first classification of never-classified variants, then point all
-    variants to the new release (one bulk UPDATE)."""
     pending = list(db.session.scalars(select(PatientVariant).where(PatientVariant.classification_release_id.is_(None))))
-    if pending:
-        known = classification.classify_keys(release, {variant.variant_key_id for variant in pending})
-        for variant in pending:
-            variant.reported_classification = variant.current_classification = known[
-                variant.variant_key_id
-            ].classification
-            variant.classification_release = release
+    known = classification.classify_keys(release, {variant.variant_key_id for variant in pending})
+    for variant in pending:
+        engine.classify(variant, known[variant.variant_key_id].classification)
     db.session.execute(
         update(PatientVariant)
         .where(
@@ -693,7 +702,7 @@ def _record_variant_changes(run: ReevaluationRun, changes: Mapping[int, _Change]
             old_mechanism=change.key.old_mechanism,
             new_mechanism=change.key.new_mechanism,
             category=change.category,
-            carrier_count=engine.carriers_by_key[key_id],
+            carrier_count=len(engine.carriers_by_key[key_id]),
         )
         for key_id, change in changes.items()
     )
@@ -715,35 +724,44 @@ def _gene_order(gene: str) -> tuple[int, str]:
     return (C.GENES.index(gene), gene) if gene in C.GENES else (len(C.GENES), gene)
 
 
+def _carriers(engine: _Engine, key_ids: Iterable[int]) -> int:
+    """Distinct patients carrying any of ``key_ids``."""
+    return len(set().union(*(engine.carriers_by_key[key_id] for key_id in key_ids)))
+
+
 def _release_summary(
     engine: _Engine, changes: Mapping[int, _Change], old: KbRelease | None, new: KbRelease, *, initial: bool
 ) -> dict[str, Any]:
     """Per-category and per-gene counts, superseded reasons and the list of changes."""
-    categories: dict[str, dict[str, int]] = {
-        category: {"changed_variants": 0, "carriers": 0} for category in C.CHANGE_CATEGORIES
-    }
-    genes: dict[str, dict[str, Any]] = {}
+    keys_by_category: defaultdict[str, list[int]] = defaultdict(list)
+    keys_by_gene: defaultdict[str, list[int]] = defaultdict(list)
     for key_id, change in changes.items():
-        carriers = engine.carriers_by_key[key_id]
-        categories[change.category]["changed_variants"] += 1
-        categories[change.category]["carriers"] += carriers
-        gene = genes.setdefault(
-            change.gene or "unknown",
-            {"changed_variants": 0, "carriers": 0, "categories": dict.fromkeys(C.CHANGE_CATEGORIES, 0)},
-        )
-        gene["changed_variants"] += 1
-        gene["carriers"] += carriers
-        gene["categories"][change.category] += 1
-    for category, counts in categories.items():
-        counts.update(engine.outcome_counts(category))
+        keys_by_category[change.category].append(key_id)
+        keys_by_gene[change.gene or "unknown"].append(key_id)
+    categories = {
+        category: {
+            "changed_variants": len(keys_by_category[category]),
+            "carriers": _carriers(engine, keys_by_category[category]),
+            **engine.outcome_counts(category),
+        }
+        for category in C.CHANGE_CATEGORIES
+    }
+    genes = {}
+    for gene in sorted(keys_by_gene, key=_gene_order):
+        per_category = Counter(changes[key_id].category for key_id in keys_by_gene[gene])
+        genes[gene] = {
+            "changed_variants": len(keys_by_gene[gene]),
+            "carriers": _carriers(engine, keys_by_gene[gene]),
+            "categories": {category: per_category[category] for category in C.CHANGE_CATEGORIES},
+        }
     listed = list(changes.items())[:MAX_SUMMARY_CHANGES]
     return {
         "initial": initial,
         "old_release": old.label if old is not None else None,
         "new_release": new.label,
         "categories": categories,
-        "genes": {name: genes[name] for name in sorted(genes, key=_gene_order)},
-        "superseded_by_reason": dict(sorted(engine.reasons.items())),
+        "genes": genes,
+        "superseded_by_reason": engine.superseded_by_reason(),
         "changes_total": len(changes),
         "changes_truncated": len(changes) > len(listed),
         "changes": [
@@ -757,7 +775,7 @@ def _release_summary(
                 "new_mechanism": change.key.new_mechanism,
                 "category": change.category,
                 "removed": change.removed,
-                "carriers": engine.carriers_by_key[key_id],
+                "carriers": len(engine.carriers_by_key[key_id]),
             }
             for key_id, change in listed
         ],
@@ -767,12 +785,18 @@ def _release_summary(
 def activate_release(
     new_release: KbRelease, *, strategy: str = "change_driven", user: User | None = None
 ) -> ReevaluationRun:
-    """Make ``new_release`` current and re-evaluate affected carriers (Algorithm 2, SPEC §7.1/§7.2).
+    """Make ``new_release`` current and re-evaluate the affected carriers (Algorithm 2, SPEC §7.1/§7.2).
 
     ``strategy="change_driven"`` examines only stored keys and only the carriers of changed keys
     (``records_examined`` = carrier × changed-key records); ``"full"`` reconciles every patient
     (``records_examined`` = all patient-variant records). Both record one VariantChange per
     changed stored key and apply the category semantics described in the module docstring.
+
+    ``summary``: ``initial``, ``old_release`` / ``new_release`` labels, ``categories`` (per change
+    category: ``changed_variants``, distinct ``carriers`` and the outcome counters of
+    :data:`OUTCOME_COUNTERS`), ``genes`` (per gene: ``changed_variants``, ``carriers`` and the
+    number of changes per category), ``superseded_by_reason``, ``changes_total``,
+    ``changes_truncated`` and ``changes`` (the first :data:`MAX_SUMMARY_CHANGES` changes).
 
     Raises :class:`ValueError` (before any run is recorded) for an unknown strategy, an unstored
     release or the release that is already current. Other failures are recorded as a failed run
@@ -784,7 +808,7 @@ def activate_release(
     old_release = KbRelease.current()
     if new_release.is_current or (old_release is not None and old_release.id == new_release.id):
         raise ValueError(f"Release {new_release.label!r} is already the current release; activate a different release.")
-    info = _run_info("clinvar_release", strategy, old_release, new_release, user)
+    info = _RunInfo.begin("clinvar_release", strategy, old_release, new_release, user)
     initial = old_release is None
     with _failure_recorded(info):
         run = _start_run(info, user)
@@ -802,9 +826,25 @@ def activate_release(
         if strategy == "change_driven":
             _reevaluate_changed_carriers(engine, changes, semantics)
         else:
-            _reevaluate_all_patients(engine, trigger="clinvar_release", apply=semantics, changes=changes)
-        engine.counts["carriers_affected"] = len(engine.carrier_patients)
-        _complete_classification_bookkeeping(new_release)
+
+            def reason_of(key_id: int) -> str:
+                change = changes.get(key_id)
+                return change.reason if change is not None else _DEFAULT_REASON
+
+            def carrier_gene(variant: PatientVariant) -> str | None:
+                change = changes.get(variant.variant_key_id)
+                return change.gene if change is not None else None
+
+            _reevaluate_all_patients(
+                engine,
+                trigger="clinvar_release",
+                apply=semantics,
+                reason_of=reason_of,
+                carrier_gene=carrier_gene,
+                sync_classifications=True,
+            )
+        _point_variants_to_release(engine, new_release)
+        engine.counts["carriers_affected"] = engine.carriers_affected
         _record_variant_changes(run, changes, engine)
         _make_current(new_release, engine.now)
         _finish_run(run, engine, info, _release_summary(engine, changes, old_release, new_release, initial=initial))
@@ -842,51 +882,20 @@ class _Revision:
 
     @property
     def label(self) -> str:
-        if self.old_version is None:
-            return f"{self.code} v{self.new_version} (new rule)"
+        """``"D4 v1 → v2"`` — used for withdrawn alerts, which only a code with an earlier version has."""
         return f"{self.code} v{self.old_version} → v{self.new_version}"
 
 
 def _revisions(changes: Sequence[Mapping[str, Any]]) -> dict[str, _Revision]:
     revisions: dict[str, _Revision] = {}
     for change in changes:
-        new = db.session.get(RuleVersion, change["new_rule_version_id"])
-        old_id = change["old_rule_version_id"]
-        old = db.session.get(RuleVersion, old_id) if old_id is not None else None
-        genes = frozenset(new.genes) | (frozenset(old.genes) if old is not None else frozenset())
-        revisions[change["code"]] = _Revision(change["code"], change["old_version"], change["new_version"], genes)
+        genes = set(db.session.get(RuleVersion, change["new_rule_version_id"]).genes)
+        if change["old_rule_version_id"] is not None:
+            genes.update(db.session.get(RuleVersion, change["old_rule_version_id"]).genes)
+        revisions[change["code"]] = _Revision(
+            change["code"], change["old_version"], change["new_version"], frozenset(genes)
+        )
     return revisions
-
-
-def _withdrawal_semantics(engine: _Engine, cause: Callable[[Sequence[Alert]], str]) -> _Semantics:
-    """One review notice per (patient, variant) whose non-info alert(s) were superseded."""
-
-    def apply(patient: Patient, results: Sequence[ReconcileResult], classified: Sequence[ClassifiedVariant]) -> None:
-        variants = {variant.variant_key_id: variant for variant in classified}
-        superseded: defaultdict[int, list[Alert]] = defaultdict(list)
-        created: defaultdict[int, list[Alert]] = defaultdict(list)
-        for result in results:
-            for alert in result.superseded:
-                if alert.kind == "alert":
-                    superseded[alert.variant_key_id].append(alert)
-            for alert in result.created:
-                created[alert.variant_key_id].append(alert)
-        for key_id in sorted(superseded):
-            alerts = superseded[key_id]
-            if all(alert.severity == "info" for alert in alerts):
-                continue
-            variant = variants.get(key_id)
-            new_class = variant.classification if variant is not None else alerts[0].classification
-            engine.notice(
-                patient,
-                key_id,
-                alerts,
-                old=alerts[0].classification,
-                new=new_class,
-                message=_withdrawal_message(cause(alerts), alerts, created.get(key_id, []), variant),
-            )
-
-    return apply
 
 
 def _finding_text(alert: Alert) -> str:
@@ -907,39 +916,59 @@ def _withdrawal_message(
     return f"{text}. {_REVIEW_ADVICE}"
 
 
-def _reevaluate_rule_carriers(engine: _Engine, revisions: Mapping[str, _Revision], apply: _Semantics) -> Counter[str]:
-    """Change-driven rule revision: carriers of the revised rules' genes, only those rules.
+def _withdrawal_semantics(engine: _Engine, cause: Callable[[Sequence[Alert]], str]) -> _Semantics:
+    """One review notice per (patient, variant) whose superseded alerts include a non-info one.
 
-    Returns the number of carriers per gene.
+    Used by rule revisions and full recomputations: actionable advice is never withdrawn silently.
+    Created alerts keep the §6.3 defaults (a newly firing alert notifies).
     """
+
+    def apply(patient: Patient, results: Sequence[ReconcileResult], classified: Sequence[ClassifiedVariant]) -> None:
+        variants = {variant.variant_key_id: variant for variant in classified}
+        superseded: defaultdict[int, list[Alert]] = defaultdict(list)
+        created: defaultdict[int, list[Alert]] = defaultdict(list)
+        for result in results:
+            for alert in result.superseded:
+                if alert.kind == "alert":
+                    superseded[alert.variant_key_id].append(alert)
+            for alert in result.created:
+                created[alert.variant_key_id].append(alert)
+        for key_id, alerts in sorted(superseded.items()):
+            if all(alert.severity == "info" for alert in alerts):
+                continue
+            variant = variants.get(key_id)
+            engine.notice(
+                patient,
+                key_id,
+                alerts,
+                old=alerts[0].classification,
+                new=variant.classification if variant is not None else alerts[0].classification,
+                message=_withdrawal_message(cause(alerts), alerts, created.get(key_id, []), variant),
+            )
+
+    return apply
+
+
+def _reevaluate_rule_carriers(engine: _Engine, revisions: Mapping[str, _Revision], apply: _Semantics) -> None:
+    """Change-driven rule revision: carriers of the revised rules' genes, only those rules."""
     genes = frozenset().union(*(revision.genes for revision in revisions.values()))
-    carriers = _group_by_patient(_variants_query().where(PatientVariant.gene.in_(sorted(genes))))
+    carriers = _group_by_patient([_variants_query().where(PatientVariant.gene.in_(sorted(genes)))])
     known = classification.classify_keys(
         engine.release, {variant.variant_key_id for variants in carriers.values() for variant in variants}
     )
-    carriers_by_gene: Counter[str] = Counter()
     for patients in _patient_batches(sorted(carriers)):
         for patient in patients:
-            classified = [_classified(variant, known[variant.variant_key_id]) for variant in carriers[patient.id]]
+            classified: list[ClassifiedVariant] = []
+            for variant in carriers[patient.id]:
+                engine.carrier(patient.id, variant.variant_key_id, variant.gene)
+                classified.append(_classified(variant, known[variant.variant_key_id]))
             carried = {variant.gene for variant in classified}
-            carriers_by_gene.update(carried)
             codes = {code for code, revision in revisions.items() if revision.genes & carried}
-            engine.carrier(patient.id)
             result = engine.reconcile(
                 patient, classified, trigger="rule_revision", reason=_RULE_REASON, rule_codes=codes
             )
             apply(patient, [result], classified)
             engine.record([result])
-    return carriers_by_gene
-
-
-def _carriers_by_gene(genes: frozenset[str]) -> Counter[str]:
-    statement = (
-        select(PatientVariant.gene, func.count(func.distinct(PatientVariant.patient_id)))
-        .where(PatientVariant.gene.in_(sorted(genes)))
-        .group_by(PatientVariant.gene)
-    )
-    return Counter(dict(db.session.execute(statement).tuples().all()))
 
 
 def apply_rule_set(
@@ -947,8 +976,8 @@ def apply_rule_set(
 ) -> ReevaluationRun:
     """Import rule versions and re-evaluate the carriers of every revised rule (SPEC §7.3).
 
-    :func:`~ge_ehr.services.alerting.import_rule_versions` validates and stores the document
-    (an existing (code, version) must be identical); then, for every code whose current version
+    :func:`~ge_ehr.services.alerting.import_rule_versions` validates and stores the document (an
+    existing (code, version) must be identical); then, for every code whose current version
     changed, the carriers of its old and new genes are reconciled for that rule under the current
     release (``strategy="full"``: every patient, every rule). Still firing with the same severity →
     provenance update (``confirmed_rule_version_id``) without notification; newly firing → new
@@ -956,13 +985,17 @@ def apply_rule_set(
     ``rule_revised``) with a review notice when a non-info alert was withdrawn, plus the new
     finding if any. A rule set identical to the current one gives a no-op run.
 
+    ``summary``: ``rule_set``, ``label``, ``release``, ``rule_changes`` (code, versions, genes),
+    ``rules`` (outcome counters per rule code), ``genes`` (distinct ``carriers`` per affected
+    gene) and ``superseded_by_reason``.
+
     Raises :class:`~ge_ehr.services.rules.RuleDefinitionError` (no run recorded) for an invalid
     rule set and :class:`ValueError` for an unknown strategy; other failures are recorded as a
     failed run and re-raised.
     """
     _check_strategy(strategy)
     release = KbRelease.current()
-    info = _run_info("rule_revision", strategy, release, release, user)
+    info = _RunInfo.begin("rule_revision", strategy, release, release, user)
     with _failure_recorded(info, passthrough=(RuleDefinitionError,)):
         changes = alerting.import_rule_versions(doc, user=user)
         info.rule_change = [
@@ -973,23 +1006,26 @@ def apply_rule_set(
         engine = _Engine(run, release, user=user, group_of=lambda alert: alert.rule_code)
         revisions = _revisions(changes)
         genes = frozenset().union(*(revision.genes for revision in revisions.values()))
-        carriers_by_gene: Counter[str] = Counter()
         if revisions:
 
             def cause(alerts: Sequence[Alert]) -> str:
                 codes = sorted({alert.rule_code for alert in alerts} & revisions.keys(), key=rule_code_sort_key)
-                labels = [revisions[code].label for code in codes]
-                return f"Rule revision {', '.join(labels)}" if labels else "Rule revision"
+                labels = ", ".join(revisions[code].label for code in codes)
+                return f"Rule revision {labels}" if labels else "Rule revision"
 
             semantics = _withdrawal_semantics(engine, cause)
             if strategy == "change_driven":
-                carriers_by_gene = _reevaluate_rule_carriers(engine, revisions, semantics)
+                _reevaluate_rule_carriers(engine, revisions, semantics)
             else:
                 _reevaluate_all_patients(
-                    engine, trigger="rule_revision", apply=semantics, default_reason=_RULE_REASON, carrier_genes=genes
+                    engine,
+                    trigger="rule_revision",
+                    apply=semantics,
+                    reason_of=lambda _key_id: _RULE_REASON,
+                    carrier_gene=lambda variant: variant.gene if variant.gene in genes else None,
+                    sync_classifications=False,
                 )
-                carriers_by_gene = _carriers_by_gene(genes)
-        engine.counts["carriers_affected"] = len(engine.carrier_patients)
+        engine.counts["carriers_affected"] = engine.carriers_affected
         summary = {
             "rule_set": doc.get("rule_set"),
             "label": doc.get("label"),
@@ -1007,8 +1043,10 @@ def apply_rule_set(
                 code: engine.outcome_counts(code)
                 for code in sorted(revisions.keys() | engine.groups.keys(), key=rule_code_sort_key)
             },
-            "genes": {gene: {"carriers": carriers_by_gene[gene]} for gene in sorted(genes, key=_gene_order)},
-            "superseded_by_reason": dict(sorted(engine.reasons.items())),
+            "genes": {
+                gene: {"carriers": len(engine.carriers_by_gene[gene])} for gene in sorted(genes, key=_gene_order)
+            },
+            "superseded_by_reason": engine.superseded_by_reason(),
         }
         _finish_run(run, engine, info, summary)
     return run
@@ -1017,27 +1055,38 @@ def apply_rule_set(
 def full_recompute(*, user: User | None = None, trigger: str = "full_recompute") -> ReevaluationRun:
     """Reconcile every patient (full scope) against the current release and rules.
 
-    In a consistent database this changes nothing (every event is handled when it happens); it
-    repairs drift, e.g. after rule versions were bootstrapped without re-evaluation. Superseded
-    findings get reason ``reclassified`` and a withdrawn non-info alert opens a review notice
-    (actionable advice is never withdrawn silently). Raises :class:`ValueError` for an unknown
-    trigger; other failures are recorded as a failed run and re-raised.
+    In a consistent database this changes no alert (every event is handled when it happens) and
+    only refreshes provenance; it repairs drift, e.g. after rule versions were loaded without
+    re-evaluation. PatientVariant classifications are brought in line with the current release
+    (module docstring). Superseded findings get reason ``reclassified`` and a withdrawn non-info
+    alert opens a review notice. ``summary``: ``release``, ``rules`` (outcome counters per rule
+    code) and ``superseded_by_reason``.
+
+    Raises :class:`ValueError` for an unknown trigger; other failures are recorded as a failed run
+    and re-raised.
     """
     if trigger not in C.TRIGGERS:
         raise ValueError(f"Unknown trigger {trigger!r}; expected one of {', '.join(C.TRIGGERS)}.")
     release = KbRelease.current()
-    info = _run_info(trigger, "full", release, release, user)
+    info = _RunInfo.begin(trigger, "full", release, release, user)
     with _failure_recorded(info):
         run = _start_run(info, user)
-        engine = _Engine(run, release, user=user)
-        basis = release.label if release is not None else "no knowledge-base release"
-        semantics = _withdrawal_semantics(
-            engine, lambda _alerts: f"Full re-evaluation under {basis} and the current rules"
+        engine = _Engine(run, release, user=user, group_of=lambda alert: alert.rule_code)
+        cause = f"Full re-evaluation under {release.label if release is not None else 'no knowledge-base release'}"
+        _reevaluate_all_patients(
+            engine,
+            trigger=trigger,
+            apply=_withdrawal_semantics(engine, lambda _alerts: f"{cause} and the current rules"),
+            reason_of=lambda _key_id: _DEFAULT_REASON,
+            carrier_gene=lambda _variant: None,
+            sync_classifications=release is not None,
         )
-        _reevaluate_all_patients(engine, trigger=trigger, apply=semantics)
+        if release is not None:
+            _point_variants_to_release(engine, release)
         summary = {
             "release": release.label if release is not None else None,
-            "superseded_by_reason": dict(sorted(engine.reasons.items())),
+            "rules": {code: engine.outcome_counts(code) for code in sorted(engine.groups, key=rule_code_sort_key)},
+            "superseded_by_reason": engine.superseded_by_reason(),
         }
         _finish_run(run, engine, info, summary)
     return run
@@ -1103,7 +1152,9 @@ def provenance_as_of(alert: Alert, at: datetime) -> AlertEvent | None:
 
 
 def release_history() -> list[KbRelease]:
-    """Activated releases ordered by activation ``sequence`` (a re-activated release appears once,
-    at its latest activation)."""
+    """Activated releases ordered by activation ``sequence``.
+
+    A re-activated release appears once, at its latest activation; the runs record every activation.
+    """
     statement = select(KbRelease).where(KbRelease.sequence.is_not(None)).order_by(KbRelease.sequence)
     return list(db.session.scalars(statement))
