@@ -22,6 +22,7 @@ from ge_ehr.services import classification
 from ge_ehr.services.alerting import (
     ReconcileResult,
     clinical_context,
+    current_alerts_by_patient,
     evaluate_patient_now,
     import_rule_versions,
     load_current_rules,
@@ -561,6 +562,92 @@ def test_current_alerts_are_loaded_with_a_single_query(
 
     assert len(result.unchanged) == 3
     assert len(statements) == 1 and "FROM alerts" in statements[0], statements
+
+
+def test_preloaded_current_alerts_need_no_query_and_flush_is_deferred(
+    db: SQLAlchemy, release: KbRelease, rules_v1: list[RuleSpec]
+) -> None:
+    patient, pv = patient_with(V01_HNF1A, "P", "Insulin glargine")
+    other, other_pv = patient_with(V02_GCK, "P", "Metformin")
+    reconcile_patient(patient, release, rules_v1, trigger="vcf_upload", classified=[classified(pv)])
+    reconcile_patient(other, release, rules_v1, trigger="vcf_upload", classified=[classified(other_pv)])
+    preloaded = current_alerts_by_patient([patient.id, other.id])
+    assert summary(sorted(preloaded[patient.id], key=lambda alert: alert.rule_code)) == [
+        ("D2", "alert", "high"),
+        ("D5", "alert", "low"),
+    ]
+    patient.medications[0].end_date = date(2026, 2, 1)
+    add_medication(patient, "Gliclazide")
+    db.session.flush()
+    statements: list[str] = []
+
+    def record(conn: Any, cursor: Any, statement: str, *args: Any) -> None:
+        statements.append(statement)
+
+    event.listen(db.engine, "before_cursor_execute", record)
+    try:
+        result = reconcile_patient(
+            patient,
+            release,
+            rules_v1,
+            trigger="medication_change",
+            classified=[classified(pv)],
+            current_alerts=preloaded[patient.id],
+            flush=False,
+        )
+    finally:
+        event.remove(db.engine, "before_cursor_execute", record)
+
+    assert statements == [], "no query and no flush: the caller flushes the batch"
+    assert summary(result.superseded) == [("D2", "alert", "high")]
+    assert summary(result.created) == [("D2", "note", None)] and result.created[0].id is None
+    db.session.flush()
+    assert_one_current_alert_per_key(patient)
+    # The preloaded list stays valid: it gained the new note and its superseded alert is skipped.
+    assert result.created[0] in preloaded[patient.id]
+    again = reconcile_patient(
+        patient, release, rules_v1, trigger="manual", classified=[classified(pv)], current_alerts=preloaded[patient.id]
+    )
+    assert (again.created, again.superseded, again.confirmed) == ([], [], [])
+    assert summary(sorted(again.unchanged, key=lambda alert: alert.rule_code)) == [
+        ("D2", "note", None),
+        ("D5", "alert", "low"),
+    ]
+
+
+def test_revised_recommendation_replaces_the_alert(
+    db: SQLAlchemy, release: KbRelease, rules_v1: list[RuleSpec]
+) -> None:
+    patient, pv = patient_with(V01_HNF1A, "P", "Insulin glargine")
+    d2 = reconcile_patient(patient, release, rules_v1, trigger="vcf_upload", classified=[classified(pv)]).created[0]
+    d2.status = "reviewed"
+    old_text = V1["rules"][1]["recommendation"]
+    revised = rule_definition(
+        "D2", 2, recommendation="Refer to the diabetes genetics clinic.", clinical=V1["rules"][1]["clinical"]
+    )
+    import_rule_versions({"rules": [revised]})
+
+    result = reconcile_patient(
+        patient, release, load_current_rules(), trigger="rule_revision", rule_codes={"D2"},
+        superseded_reason="rule_revised", classified=[classified(pv)],
+    )
+
+    (replacement,) = result.created
+    assert result.superseded == [d2] and result.revised == [(d2, replacement)] and result.confirmed == []
+    assert (d2.status, d2.superseded_reason, d2.message) == ("superseded", "rule_revised", old_text)
+    assert (replacement.status, replacement.notify, replacement.message) == (
+        "active",
+        True,
+        "Refer to the diabetes genetics clinic.",
+    )
+    created = replacement.events[0]
+    assert (created.event, created.message, created.severity, created.title) == (
+        "created",
+        replacement.message,
+        "high",
+        replacement.title,
+    )
+    assert_one_current_alert_per_key(patient)
 
 
 # ---------------------------------------------------------------------------

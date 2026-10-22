@@ -46,10 +46,16 @@ Entry points (each logs one :class:`~ge_ehr.models.ReevaluationRun`, flushes, ne
 (``classification_release_id IS NULL``) gets ``reported_classification = current_classification``
 = its class and no reclassification count. Afterwards every class change — and every mechanism
 change of a changed key — increments ``reclassified_count`` and sets ``last_reclassified_at`` /
-``last_reclassified_run_id`` (FHIR ``amended``). After an activation every PatientVariant points to the new release: unchanged keys
-were compared and found identical, so the new release backs their class too (one bulk UPDATE; no
-record is re-evaluated for it). :func:`full_recompute` applies the same bookkeeping, so it also
-repairs PatientVariants whose stored class had drifted from the current release.
+``last_reclassified_run_id`` (FHIR ``amended``). After an activation every PatientVariant points
+to the new release: unchanged keys were compared and found identical, so the new release backs
+their class too (one bulk UPDATE; no record is re-evaluated for it). :func:`full_recompute`
+applies the same bookkeeping, so it also repairs PatientVariants whose stored class had drifted
+from the current release.
+
+**Batching.** Patients are reconciled in batches of :data:`PATIENT_BATCH`: their current alerts
+are loaded in one query and the session is flushed once per batch (and whenever a superseded row
+must reach the database before its replacement), so a run's cost does not include a query and a
+flush per patient.
 
 **Re-activation.** Re-activating the current release raises :class:`ValueError`. Activating an
 older, previously activated release is a *new* activation: it is compared with the current
@@ -333,6 +339,17 @@ class _Engine:
         self.reasons: Counter[str] = Counter()
         self.carriers_by_key: defaultdict[int, set[int]] = defaultdict(set)
         self.carriers_by_gene: defaultdict[str, set[int]] = defaultdict(set)
+        self._current_alerts: dict[int, list[Alert]] = {}
+
+    @contextmanager
+    def batch(self, patients: Sequence[Patient]) -> Iterator[None]:
+        """Reconcile a batch of patients: their current alerts in one query, one flush at the end."""
+        self._current_alerts = alerting.current_alerts_by_patient(patient.id for patient in patients)
+        try:
+            yield
+            db.session.flush()
+        finally:
+            self._current_alerts = {}
 
     def carrier(self, patient_id: int, variant_key_id: int, gene: str) -> None:
         """Note that ``patient_id`` carries an affected key (changed key or revised rule's gene)."""
@@ -384,6 +401,8 @@ class _Engine:
             user=self.user,
             now=self.now,
             classified=classified,
+            current_alerts=self._current_alerts.get(patient.id),
+            flush=False,
         )
 
     def _count(self, alert: Alert, counter: str) -> None:
@@ -534,23 +553,24 @@ def _reevaluate_all_patients(
             engine.release,
             {variant.variant_key_id for variants in variants_by_patient.values() for variant in variants},
         )
-        for patient in patients:
-            classified: list[ClassifiedVariant] = []
-            groups: defaultdict[str, set[int]] = defaultdict(set)
-            for variant in variants_by_patient.get(patient.id, []):
-                key_class = known[variant.variant_key_id]
-                if sync_classifications:
-                    engine.classify(
-                        variant, key_class.classification, reinterpreted=reinterpreted(variant.variant_key_id)
-                    )
-                gene = carrier_gene(variant)
-                if gene is not None:
-                    engine.carrier(patient.id, variant.variant_key_id, gene)
-                groups[reason_of(variant.variant_key_id)].add(variant.variant_key_id)
-                classified.append(_classified(variant, key_class))
-            results = _reconcile_grouped(engine, patient, classified, groups, trigger=trigger, full_scope=True)
-            apply(patient, results, classified)
-            engine.record(results)
+        with engine.batch(patients):
+            for patient in patients:
+                classified: list[ClassifiedVariant] = []
+                groups: defaultdict[str, set[int]] = defaultdict(set)
+                for variant in variants_by_patient.get(patient.id, []):
+                    key_class = known[variant.variant_key_id]
+                    if sync_classifications:
+                        engine.classify(
+                            variant, key_class.classification, reinterpreted=reinterpreted(variant.variant_key_id)
+                        )
+                    gene = carrier_gene(variant)
+                    if gene is not None:
+                        engine.carrier(patient.id, variant.variant_key_id, gene)
+                    groups[reason_of(variant.variant_key_id)].add(variant.variant_key_id)
+                    classified.append(_classified(variant, key_class))
+                results = _reconcile_grouped(engine, patient, classified, groups, trigger=trigger, full_scope=True)
+                apply(patient, results, classified)
+                engine.record(results)
 
 
 # ---------------------------------------------------------------------------
@@ -711,20 +731,21 @@ def _reevaluate_changed_carriers(engine: _Engine, changes: Mapping[int, _Change]
     """Change-driven: only the carriers of changed keys, restricted to those keys."""
     carriers = _variants_with_keys(changes)
     for patients in _patient_batches(sorted(carriers)):
-        for patient in patients:
-            classified: list[ClassifiedVariant] = []
-            groups: defaultdict[str, set[int]] = defaultdict(set)
-            for variant in carriers[patient.id]:
-                change = changes[variant.variant_key_id]
-                engine.classify(variant, change.key.new_class, reinterpreted=change.mechanism_changed)
-                engine.carrier(patient.id, variant.variant_key_id, change.gene)
-                classified.append(_classified(variant, change.known))
-                groups[change.reason].add(variant.variant_key_id)
-            results = _reconcile_grouped(
-                engine, patient, classified, groups, trigger="clinvar_release", full_scope=False
-            )
-            apply(patient, results, classified)
-            engine.record(results)
+        with engine.batch(patients):
+            for patient in patients:
+                classified: list[ClassifiedVariant] = []
+                groups: defaultdict[str, set[int]] = defaultdict(set)
+                for variant in carriers[patient.id]:
+                    change = changes[variant.variant_key_id]
+                    engine.classify(variant, change.key.new_class, reinterpreted=change.mechanism_changed)
+                    engine.carrier(patient.id, variant.variant_key_id, change.gene)
+                    classified.append(_classified(variant, change.known))
+                    groups[change.reason].add(variant.variant_key_id)
+                results = _reconcile_grouped(
+                    engine, patient, classified, groups, trigger="clinvar_release", full_scope=False
+                )
+                apply(patient, results, classified)
+                engine.record(results)
 
 
 def _point_variants_to_release(engine: _Engine, release: KbRelease) -> None:
@@ -1016,18 +1037,19 @@ def _reevaluate_rule_carriers(engine: _Engine, revisions: Mapping[str, _Revision
         engine.release, {variant.variant_key_id for variants in carriers.values() for variant in variants}
     )
     for patients in _patient_batches(sorted(carriers)):
-        for patient in patients:
-            classified: list[ClassifiedVariant] = []
-            for variant in carriers[patient.id]:
-                engine.carrier(patient.id, variant.variant_key_id, variant.gene)
-                classified.append(_classified(variant, known[variant.variant_key_id]))
-            carried = {variant.gene for variant in classified}
-            codes = {code for code, revision in revisions.items() if revision.genes & carried}
-            result = engine.reconcile(
-                patient, classified, trigger="rule_revision", reason=_RULE_REASON, rule_codes=codes
-            )
-            apply(patient, [result], classified)
-            engine.record([result])
+        with engine.batch(patients):
+            for patient in patients:
+                classified: list[ClassifiedVariant] = []
+                for variant in carriers[patient.id]:
+                    engine.carrier(patient.id, variant.variant_key_id, variant.gene)
+                    classified.append(_classified(variant, known[variant.variant_key_id]))
+                carried = {variant.gene for variant in classified}
+                codes = {code for code, revision in revisions.items() if revision.genes & carried}
+                result = engine.reconcile(
+                    patient, classified, trigger="rule_revision", reason=_RULE_REASON, rule_codes=codes
+                )
+                apply(patient, [result], classified)
+                engine.record([result])
 
 
 def apply_rule_set(

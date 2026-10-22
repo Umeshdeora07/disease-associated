@@ -19,6 +19,7 @@ from typing import Any
 
 import pytest
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import event as sa_event
 from sqlalchemy import func, select
 from sqlalchemy.orm import joinedload, selectinload
 
@@ -27,7 +28,10 @@ from ge_ehr.extensions import db as database
 from ge_ehr.models import (
     Alert,
     AuditLog,
+    Diagnosis,
     KbRelease,
+    KnownVariant,
+    Medication,
     Patient,
     PatientVariant,
     ReevaluationRun,
@@ -1209,6 +1213,51 @@ def test_full_strategy_activation_repairs_drift_without_reclassification_flags(d
     assert run.summary["categories"]["upgrade"]["notes_created"] == 0
 
 
+def test_batched_runs_load_alerts_per_batch_and_reach_the_same_state(db: SQLAlchemy, rules_v1: None) -> None:
+    """Re-evaluation runs preload current alerts per patient batch and flush once per batch."""
+    r1 = release("R1", {V01: "P", V03: "LP", V06: "VUS"})
+    r2 = release("R2", {V01: "LP", V03: "VUS", V06: "P"})
+    patients = [carrier(V01, V03, V06, drugs=["insulin"] if number % 2 else ["sulfonylurea"]) for number in range(30)]
+    db.session.commit()
+    reevaluation.activate_release(r1)
+    db.session.commit()
+    executed: list[str] = []
+
+    def record_statement(_conn: Any, _cursor: Any, statement: str, *_args: Any) -> None:
+        executed.append(statement)
+
+    sa_event.listen(db.engine, "before_cursor_execute", record_statement)
+    try:
+        run = reevaluation.activate_release(r2, strategy="full")
+    finally:
+        sa_event.remove(db.engine, "before_cursor_execute", record_statement)
+
+    alert_selects = [sql for sql in executed if sql.lstrip().startswith("SELECT") and "FROM alerts" in sql]
+    assert len(alert_selects) <= 2, "current alerts are loaded per batch, not per patient"
+    assert run.patients_reevaluated == 30
+    for patient in patients:
+        _assert_matches_algorithm_1(patient, {V01: "LP", V03: "VUS", V06: "P"})
+    assert len(notices_of(patients[1])) == 1, "D3 (medium) withdrawn by the HNF4A downgrade"
+
+
+def _assert_matches_algorithm_1(patient: Patient, classes: Mapping[Key, str]) -> None:
+    by_label = {label(key): cls for key, cls in classes.items()}
+    classified = [
+        ClassifiedVariant(
+            variant.id, variant.variant_key_id, variant.gene, by_label[variant.label], "unknown", variant.zygosity
+        )
+        for variant in patient.variants
+    ]
+    rules = load_current_rules()
+    expected = {finding.key for finding in evaluate(classified, alerting.clinical_context(patient), rules)}
+    actual = {
+        (alert.rule_code, alert.variant_key_id, alert.kind, alert.severity)
+        for alert in alerts_of(patient)
+        if alert.is_current
+    }
+    assert actual == expected
+
+
 def test_full_recompute_without_a_current_release(db: SQLAlchemy, rules_v1: None) -> None:
     patient = carrier(V01)
     run = reevaluation.full_recompute()
@@ -1591,16 +1640,41 @@ def test_change_driven_work_scales_with_the_carriers_of_changed_keys(db: SQLAlch
     r1_spec = {key: _random_class(rng, gene) for key, gene in keys}
     r2_spec = {key: (_random_class(rng, gene) if rng.random() < 0.05 else r1_spec[key]) for key, gene in keys}
     r1, r2 = make_release("Scale R1"), make_release("Scale R2")
+    # Bulk-built (one flush) rather than with the per-row factories: the data set is large.
+    variant_keys = {key: VariantKey(chrom=key[0], pos=key[1], ref=key[2], alt=key[3], gene=gene) for key, gene in keys}
     for kb_release, spec in ((r1, r1_spec), (r2, r2_spec)):
-        for key, (cls, mechanism) in spec.items():
-            add_known_variant(kb_release, *key, cls, mechanism=mechanism)
-    for number in range(2_000):
-        patient = make_patient(
-            mrn=f"SC-{number:05d}", diagnosis={"diabetes_type": "type2", "age_at_diagnosis_months": 400}
+        db.session.add_all(
+            KnownVariant(
+                release=kb_release,
+                variant_key=variant_keys[key],
+                gene=variant_keys[key].gene,
+                classification=cls,
+                mechanism=mechanism,
+            )
+            for key, (cls, mechanism) in spec.items()
         )
-        add_medication(patient, "Metformin", "metformin")
-        for key, _gene in rng.sample(keys, 3):
-            add_patient_variant(patient, *key)
+    for number in range(2_000):
+        patient = Patient(
+            mrn=f"SC-{number:05d}",
+            given_name="Scale",
+            family_name=f"Patient{number}",
+            sex="female",
+            birth_date=date(1990, 1, 15),
+            is_synthetic=True,
+        )
+        patient.diagnosis = Diagnosis(diabetes_type="type2", age_at_diagnosis_months=400)
+        patient.medications.append(Medication(drug_name="Metformin", drug_class="metformin"))
+        for key, gene in rng.sample(keys, 3):
+            patient.variants.append(
+                PatientVariant(
+                    variant_key=variant_keys[key],
+                    zygosity="heterozygous",
+                    gene=gene,
+                    current_classification="NC",
+                    reported_classification="NC",
+                )
+            )
+        db.session.add(patient)
     db.session.commit()
     reevaluation.activate_release(r1)
     db.session.commit()

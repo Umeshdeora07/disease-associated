@@ -3,7 +3,10 @@
 * ``app`` — a fresh ``create_app("testing")`` (private in-memory SQLite, CSRF off) with all
   tables created and an application context pushed for the duration of the test, so tests can
   use ``db.session`` directly. Requests made with the test client run in that same context
-  (and therefore share ``db.session``); commit test data before making requests.
+  (and therefore share ``db.session``); commit test data before making requests. The schema is
+  built once per session (``empty_schema``) and copied into each test's own database with
+  SQLite's backup API, which is much cheaper than ``create_all``/``drop_all`` per test; the
+  database disappears with the test's engine.
 * ``client``, ``runner``, ``db``, ``session``.
 * Users ``admin_user``, ``clinician_user``, ``lab_user`` (password ``Test-Pass-123!``), the
   ``login`` helper fixture (``login(client, user)``) and signed-in clients ``admin_client``,
@@ -13,6 +16,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 from collections.abc import Callable, Iterator
 
 import pytest
@@ -51,16 +55,44 @@ def build_app(overrides: dict | None = None) -> Flask:
     return application
 
 
-@pytest.fixture
-def app() -> Iterator[Flask]:
+def copy_database(source: sqlite3.Connection) -> None:
+    """Replace the current app's in-memory database with a copy of ``source`` (SQLite backup API)."""
+    raw = _db.engine.raw_connection()
+    try:
+        source.backup(raw.driver_connection)
+    finally:
+        raw.close()
+
+
+@pytest.fixture(scope="session")
+def empty_schema() -> Iterator[sqlite3.Connection]:
+    """An in-memory database holding the full, empty schema, created once per test session."""
     application = build_app()
+    schema = sqlite3.connect(":memory:")
     with application.app_context():
         _db.create_all()
+        raw = _db.engine.raw_connection()
+        try:
+            raw.driver_connection.backup(schema)
+        finally:
+            raw.close()
+        _db.session.remove()
+        _db.engine.dispose()
+    yield schema
+    schema.close()
+
+
+@pytest.fixture
+def app(empty_schema: sqlite3.Connection) -> Iterator[Flask]:
+    application = build_app()
+    with application.app_context():
+        copy_database(empty_schema)
         try:
             yield application
         finally:
             _db.session.remove()
-            _db.drop_all()
+            # The in-memory database lives on the engine's single (StaticPool) connection:
+            # disposing the engine closes it and discards every table.
             _db.engine.dispose()
 
 

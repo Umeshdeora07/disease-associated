@@ -189,7 +189,7 @@ normative. Add sensible indexes on all FKs and on the lookup columns named below
 | **Rule** (`rules`) | `code` (unique, `D1`…`D6`), `title`, `description`. Relationship `versions`. |
 | **RuleVersion** (`rule_versions`) | `rule_id`, `code` (denormalised), `version` (int), `definition` (JSON — §6.1), `genes` (JSON list), `severity`, `title`, `recommendation`, `source`, `kind` (`treatment`/`cascade`/`monitoring`), `is_current` (bool), `rule_set_label`, `change_note`, `created_at`, `imported_by_id`. `UniqueConstraint(rule_id, version)`. Classmethod `current_versions()` → list ordered by code. |
 | **Alert** (`alerts`) | `patient_id`, `patient_variant_id` (nullable), `variant_key_id`, `rule_code`, `created_rule_version_id`, `confirmed_rule_version_id`, `kind` (`alert`/`note`), `severity` (SEVERITIES; NULL for notes), `title`, `message` (recommendation or note text), `source`, `classification` (class at creation), `status` (ALERT_STATUSES, default `active`), `trigger` (TRIGGERS), `is_reclassified` (bool), `priority` (`normal`/`high`), `notify` (bool — counts as a clinician notification), `created_release_id` (nullable), `confirmed_release_id` (nullable), `created_run_id` (nullable), `superseded_run_id` (nullable), `created_at`, `superseded_at`, `superseded_reason` (`downgrade`/`reclassified`/`therapy_changed`/`diagnosis_changed`/`rule_revised`/`variant_removed`), `reviewed_at`, `reviewed_by_id`, `review_comment`, `review_notice_id` (nullable FK — the notice that reported its supersession). Relationships `patient`, `variant_key`, `patient_variant`, `created_rule_version`, `confirmed_rule_version`, `created_release`, `confirmed_release`, `events`, `review_notice`, `reviewed_by`. **Alerts are never deleted.** Invariant: at most one *current* (status ∈ active/reviewed) alert per `(patient_id, rule_code, variant_key_id, kind)`. |
-| **AlertEvent** (`alert_events`) — provenance | `alert_id`, `event` (`created`/`confirmed`/`reviewed`/`superseded`), `release_id`, `rule_version_id`, `classification`, `run_id`, `user_id`, `at`, `detail` (text). |
+| **AlertEvent** (`alert_events`) — provenance | `alert_id`, `event` (`created`/`confirmed`/`reviewed`/`superseded`), `release_id`, `rule_version_id`, `classification`, `run_id`, `user_id`, `at`, `detail` (text); text snapshot (nullable; filled on `created`/`confirmed` events): `title`, `message`, `source`, `severity` — the finding's text from that moment on (§7.5). |
 | **ReviewNotice** (`review_notices`) | `patient_id`, `variant_key_id`, `run_id`, `old_classification`, `new_classification`, `message`, `status` (`open`/`acknowledged`), `created_at`, `acknowledged_at`, `acknowledged_by_id`, `acknowledgement_comment`. Relationship `alerts` (back-populates `Alert.review_notice`). |
 | **ReevaluationRun** (`reevaluation_runs`) | `trigger` (TRIGGERS), `strategy` (`change_driven`/`full`/`patient`), `old_release_id`, `new_release_id`, `rule_change` (JSON list of `{code, old_version, new_version}`), `started_at`, `finished_at`, `duration_ms` (float), `status` (`running`/`success`/`failed`), `error`, `initiated_by_id`, counters (int, default 0): `stored_keys_compared`, `changed_variants`, `carriers_affected`, `patients_reevaluated`, `records_examined`, `alerts_created`, `alerts_superseded`, `alerts_confirmed`, `notes_created`, `review_notices`, `notifications`; `summary` (JSON — per-category counts etc.). Relationship `changes`. |
 | **VariantChange** (`variant_changes`) | `run_id`, `variant_key_id`, `gene`, `old_classification`, `new_classification`, `old_mechanism`, `new_mechanism`, `category` (CHANGE_CATEGORIES), `carrier_count`. |
@@ -254,8 +254,10 @@ def infer_mechanism(gene: str, condition: str | None) -> str        # MECHANISMS
   `criteria_provided,_multiple_submitters,_no_conflicts` 2; `criteria_provided,_single_submitter`
   and `criteria_provided,_conflicting_*` 1; anything else 0.
 * Mechanism (only meaningful for KCNJ11/ABCC8; other genes → `unknown`): condition mentions
-  neonatal diabetes / diabetes (regex `neonatal|diabetes`) and not hyperinsulinism → `activating`;
-  mentions `hyperinsulin|hypoglyc` and not diabetes → `inactivating`; otherwise `unknown`.
+  neonatal diabetes / diabetes or DEND syndrome (regex `neonatal|diabetes`, or the whole word
+  `DEND` / `iDEND` — developmental delay, epilepsy and neonatal diabetes, the most severe activating
+  phenotype) and not hyperinsulinism → `activating`; mentions `hyperinsulin|hypoglyc` and not
+  diabetes/DEND → `inactivating`; otherwise `unknown`.
   Rationale: activating KATP-channel variants cause neonatal diabetes, inactivating ones cause
   congenital hyperinsulinism; rule D4 requires activating variants.
 
@@ -335,7 +337,7 @@ CLI (`commands/clinvar_cmds.py`, group `clinvar`):
     {
       "code": "D2", "version": 1, "kind": "treatment",
       "title": "HNF1A diabetes on insulin or metformin",
-      "genetic": {"genes": ["HNF1A"], "classes": ["P", "LP"], "mechanism": null},
+      "genetic": {"genes": ["HNF1A"], "classes": ["P", "LP"], "mechanism": null, "zygosity": ["heterozygous"]},
       "clinical": {"any_of_drug_classes": ["insulin", "metformin"], "none_of_drug_classes": ["sulfonylurea"],
                    "max_age_at_diagnosis_months": null},
       "severity": "high",
@@ -350,19 +352,25 @@ CLI (`commands/clinvar_cmds.py`, group `clinvar`):
 `clinical: null` means "no therapy condition". Semantics of `clinical` (all present keys must hold):
 `any_of_drug_classes` — patient's current drug classes intersect the list; `none_of_drug_classes` —
 no current drug class in the list; `max_age_at_diagnosis_months` — diagnosis age known and
-`< value`. `genetic.mechanism` (nullable) — variant mechanism must equal it.
+`< value`. `genetic.mechanism` (nullable) — variant mechanism must equal it. `genetic.zygosity`
+(optional, null or a non-empty list of ZYGOSITIES) — the rule applies only to carriers with one of
+these zygosities; a variant meeting gene/class/mechanism with another zygosity gets a **note**
+instead (§6.2).
 
 **Current rules (Table III).** `ruleset_v2.json` holds the current versions; `ruleset_v1.json`
-is identical except D4 version 1 covers KCNJ11 only.
+is identical except D4 version 1 covers KCNJ11 only. D1, D2, D3 and D5 carry
+`"zygosity": ["heterozygous"]` (their advice assumes autosomal dominant, heterozygous disease;
+e.g. biallelic GCK loss causes permanent neonatal diabetes that needs insulin); D4 and D6 apply
+to any zygosity.
 
 | Code | Genetic condition | Clinical condition | Severity | Recommendation (verbatim intent) | Source |
 |---|---|---|---|---|---|
-| D1 v1 | GCK P/LP | any_of all four drug classes | medium | "Medication usually not required outside pregnancy; review whether glucose-lowering treatment can be stopped." | Kang 2021 [1]; De Sousa 2025 [4] |
-| D2 v1 | HNF1A P/LP | any_of insulin, metformin; none_of sulfonylurea | high | "Consider low-dose sulfonylurea as first-line treatment." | Kang 2021 [1]; Naylor 2024 [7] |
-| D3 v1 | HNF4A P/LP | same as D2 | medium | "Consider low-dose sulfonylurea (supporting evidence is more limited than for HNF1A)." | [1], [7] |
+| D1 v1 | GCK P/LP, heterozygous | any_of all four drug classes | medium | "Medication usually not required outside pregnancy; review whether glucose-lowering treatment can be stopped." | Kang 2021 [1]; De Sousa 2025 [4] |
+| D2 v1 | HNF1A P/LP, heterozygous | any_of insulin, metformin; none_of sulfonylurea | high | "Consider low-dose sulfonylurea as first-line treatment." | Kang 2021 [1]; Naylor 2024 [7] |
+| D3 v1 | HNF4A P/LP, heterozygous | same as D2 | medium | "Consider low-dose sulfonylurea (supporting evidence is more limited than for HNF1A)." | [1], [7] |
 | D4 v1 | KCNJ11 P/LP, mechanism activating | any_of insulin; max_age_at_diagnosis_months 12 (diagnosed in infancy) | high | "Refer to specialist to consider transfer to high-dose sulfonylurea." | [1] |
 | D4 v2 | KCNJ11 **or ABCC8** P/LP, activating | same | high | same | [1] |
-| D5 v1 | any of the 7 genes P/LP | null | low | "Offer genetic counselling and cascade testing of first-degree relatives (50% risk, autosomal dominant inheritance)." | Autosomal dominant inheritance |
+| D5 v1 | any of the 7 genes P/LP, heterozygous | null | low | "Offer genetic counselling and cascade testing of first-degree relatives (50% risk, autosomal dominant inheritance)." | Autosomal dominant inheritance |
 | D6 v1 | GCK, HNF1A or HNF4A VUS | null | info | "No treatment change; variant flagged and monitored for reclassification." | ClinGen MDEP [5]; ACMG/AMP [8] |
 
 All recommendations end up displayed with the disclaimer "Advisory — for specialist review".
@@ -374,7 +382,7 @@ class RuleDefinitionError(ValueError)
 @dataclass(frozen=True)
 class RuleSpec: rule_version_id: int | None; code; version; title; kind; genes: frozenset[str]
                 classes: frozenset[str]; mechanism: str | None; clinical: Mapping | None
-                severity; recommendation; source
+                severity; recommendation; source; zygosity: frozenset[str] | None = None
     @classmethod from_definition(defn: dict, rule_version_id=None) -> RuleSpec   # validates strictly
 @dataclass(frozen=True)
 class ClassifiedVariant: patient_variant_id: int | None; variant_key_id: int; gene; classification
@@ -397,6 +405,10 @@ if `r.clinical` is null or holds → **alert** finding (severity, recommendation
 otherwise → **note** finding (severity `None`) whose message explains which clinical condition
 failed, e.g. *"Genetic criterion of D2 met (HNF1A likely pathogenic) but therapy condition not met:
 already receiving a sulfonylurea. No alert raised."* Alerts are per (patient, rule, variant).
+When the rule restricts `zygosity` and the variant's is not listed, the finding is a **note**
+regardless of the clinical condition: *"Rule D1 applies to heterozygous carriers; this GCK
+pathogenic variant is homozygous — possible recessive/biallelic form, refer to a specialist. No
+alert raised."*
 
 ### 6.3 Reconciliation (`services/alerting.py`)
 
@@ -428,8 +440,15 @@ when given) and compares with the patient's *current* alerts/notes in the same s
   `trigger`, `created_run_id = run.id`; `notify = (kind == "alert" and severity != "info")`.
 * current & not desired → status `superseded`, `superseded_at`, `superseded_reason`,
   `superseded_run_id`, AlertEvent `superseded`. Never deleted.
-* in both → if release or rule version differ from confirmed → update `confirmed_*` + AlertEvent
-  `confirmed` (counts as provenance update); else unchanged. A `reviewed` alert stays `reviewed`.
+* in both → if release or rule version (or the note's text) differ from confirmed → update
+  `confirmed_*` + AlertEvent `confirmed` (counts as provenance update); else unchanged. A
+  `reviewed` alert stays `reviewed`. Exception: an **alert** whose recommendation text differs
+  from the finding's (a rule revision rewrote it) is an outcome change — it is superseded with
+  reason `rule_revised` and a new alert is created (`notify` as above; listed in
+  `ReconcileResult.revised` as `(old, new)` pairs as well as in `superseded`/`created`). Alert text
+  is never rewritten in place; notes (which explain the current therapy/diagnosis) are.
+* `created`/`confirmed` AlertEvents snapshot the finding's `title`, `message`, `source` and
+  `severity` (§7.5).
 * `records_examined` = number of (patient-variant × in-scope) records evaluated (= number of
   classified variants passed to `evaluate`).
 
@@ -484,16 +503,22 @@ def release_history() -> list[KbRelease]                         # activated rel
    * **upgrade** (into actionable band): created alerts get `is_reclassified=True`,
      `priority="high"`, `notify=True` unless severity `info`; superseded ones (e.g. the D6 VUS
      monitoring alert) get reason `reclassified`, no notice.
-   * **downgrade** (out of actionable band): superseded alerts get reason `downgrade`; if any
-     superseded alert has severity ≠ info, create **one ReviewNotice** per (patient, variant, run)
-     linking them ("…downgraded from LP to VUS in <release>; alert(s) D1, D5 superseded. Review any
-     treatment change made on the basis of this alert; GE-EHR never reverses therapy
-     automatically."). Created alerts (e.g. D6 monitoring) are silent (`notify=False`). The FHIR
-     export now reports the variant as `amended`.
+   * **downgrade** (out of actionable band): superseded alerts get reason `downgrade`. Created
+     alerts (e.g. D6 monitoring) are silent (`notify=False`). The FHIR export now reports the
+     variant as `amended`.
    * **within actionable / within non-actionable**: still-firing alerts → provenance updated
      (`confirmed_release_id`, AlertEvent `confirmed`); no notification. Findings that stop
-     applying (e.g. D6 after VUS→LB) are superseded silently (reason `reclassified`); findings that
-     newly apply because only the mechanism changed are created with `notify=True` (outcome changed).
+     applying (e.g. D6 after VUS→LB, D4 after activating→inactivating) are superseded (reason
+     `reclassified`); findings that newly apply because only the mechanism changed are created
+     with `notify=True` (outcome changed).
+   * **Review notices, every category**: if the superseded alerts of a (patient, variant) include
+     one with severity ≠ info, create **one ReviewNotice** per (patient, variant, run) linking
+     them ("…downgraded from LP to VUS in <release>; alert(s) D1, D5 superseded. Review any
+     treatment change made on the basis of this alert; GE-EHR never reverses therapy
+     automatically."; for a mechanism-only change "…(P) was reinterpreted in <release> (mechanism
+     activating → inactivating: the condition listed for it changed); alert(s) D4 superseded. …").
+     Superseded info alerts and notes alone are silent. Actionable advice is never withdrawn
+     without a clinician signal (paper Alg. 2).
 4. Set `K_new.is_current=True`, `sequence = max+1`, `activated_at`; previous current → False. Log
    the run with all counters and `duration_ms`.
 5. **First activation** (no previous current release): this is an *initial classification*, not a
@@ -507,7 +532,9 @@ def release_history() -> list[KbRelease]                         # activated rel
 classified against a release (`classification_release_id IS NULL`) set `reported_classification`
 and do not increment `reclassified_count`. Afterwards, every change of `current_classification`
 caused by a release activation increments `reclassified_count` and sets `last_reclassified_at` /
-`last_reclassified_run_id` (this drives FHIR `amended`). Variants ingested while no release is
+`last_reclassified_run_id` (this drives FHIR `amended`). A **mechanism change** of a changed key
+(e.g. its listed condition moved from neonatal diabetes to hyperinsulinism) is a change of
+interpretation and is counted the same way even when the class is unchanged. Variants ingested while no release is
 current get `current_classification = reported_classification = "NC"` and
 `classification_release_id = NULL`.
 
@@ -521,8 +548,13 @@ For each code whose current version changed: affected genes = old.genes ∪ new.
 patients with a PatientVariant in those genes; `reconcile_patient(..., rule_codes={code},
 trigger="rule_revision", superseded_reason="rule_revised")` under the current release. Outcome per
 (patient, variant): still fires with same severity → provenance update (`confirmed_rule_version_id`)
-without notification; newly fires → new alert `notify=True` (RS5); stops firing or severity changes →
-supersede (+ ReviewNotice if old severity ≠ info) and create the new one if any. `strategy="full"`
+without notification; same severity but the recommendation text changed → supersede (reason
+`rule_revised`, no notice) and create a new alert that notifies (§6.3) — a clinician's review never
+carries over silently to advice it did not see; newly fires → new alert `notify=True` (RS5); stops
+firing or severity changes → supersede (+ ReviewNotice if old severity ≠ info) and create the new
+one if any. Notices of a rule-revision run are recognisable by `notice.run.trigger ==
+"rule_revision"` (`run.rule_change` lists the versions); the replacement alerts are the alerts
+with `created_run_id == notice.run_id` for the same patient and variant. `strategy="full"`
 reconciles all patients instead of carriers only. Importing a rule set identical to the current one
 is a no-op run (changed 0).
 
@@ -532,13 +564,20 @@ Every entry point creates a `ReevaluationRun` (status running → success), fill
 `patients_reevaluated`, `records_examined` (sum from reconcile), `alerts_created`/`notes_created`,
 `alerts_superseded`, `alerts_confirmed`, `review_notices`, `notifications` = created alerts with
 `notify=True` + review notices; `summary` JSON = counts per category and per gene. Audit
-`reevaluation_run`.
+`reevaluation_run`. Patients are reconciled in batches (500): the batch's current alerts are loaded
+in one query (`alerting.current_alerts_by_patient`, passed as `reconcile_patient(...,
+current_alerts=..., flush=False)`) and the session is flushed once per batch.
 
 ### 7.5 Point-in-time view
 `alerts_as_of(patient, at)` returns the alerts/notes that were current at time `at`:
 `created_at ≤ at` and (`superseded_at` is null or `superseded_at > at`). Each carries its release
 and rule-version provenance, so "what did the system recommend on date X and on what evidence" is
-reproducible.
+reproducible. `provenance_as_of(alert, at)` returns the latest `created`/`confirmed` AlertEvent at
+or before `at`; `alert_snapshot_as_of(alert, at) -> AlertSnapshot | None` (fields `alert`, `event`,
+`title`, `message`, `source`, `severity`, `release`, `rule_version`, `classification`) gives the
+text and evidence shown at `at` from that event's snapshot (fallback: the alert's stored text for
+events without one). The web `?at=` view and `flask patients history --at` render the snapshot,
+never the alert's current text.
 
 ### 7.6 Failure handling
 On exception: `db.session.rollback()`, then record a ReevaluationRun with `status="failed"` and
@@ -651,10 +690,14 @@ Resources (`fullUrl: urn:uuid:<deterministic uuid5>`):
   "1-based character counting"; `81254-5` exact start-end (`valueRange.low.value = pos`);
   `69547-8` ref allele (`valueString`); `69551-0` alt allele; `53034-5` allelic state (zygosity LA code);
   `81290-9` genomic HGVS when known (from KnownVariant.hgvs, `valueCodeableConcept.text`).
-* Per variant whose current class ≠ NC a **diagnostic-implication Observation** — profile
+* Per variant whose current class ≠ NC, **or that is amended** (even if now NC), a **diagnostic-implication Observation** — profile
   `http://hl7.org/fhir/uv/genomics-reporting/StructureDefinition/diagnostic-implication`; code
   `{system: http://hl7.org/fhir/uv/genomics-reporting/CodeSystem/tbd-codes-cs, code: diagnostic-implication}`;
-  `derivedFrom` → the variant Observation; component `53037-8` clinical significance (CLASS_TO_LOINC);
+  `derivedFrom` → the variant Observation; component `53037-8` clinical significance (CLASS_TO_LOINC;
+  for an amended variant that is now NC: `valueCodeableConcept.text` "Not classified (no longer
+  listed in <release label>)", or "Not classified (<CLNSIG> in <release label>)" when still listed
+  without a classification — same deterministic id, status `amended`, so an earlier interpretation
+  is amended, never dropped);
   component `81259-4` associated phenotype (`valueCodeableConcept.text` = condition) when known;
   `status` final/amended as above; `note` with provenance ("Classified against <release label>,
   review status …, expert panel yes/no; reclassified N time(s)").

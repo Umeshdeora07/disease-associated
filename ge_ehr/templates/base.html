@@ -34,7 +34,7 @@
 <a class="skip-link" href="#main-content">Skip to main content</a>
 
 <header class="app-header sticky-top">
-  <nav class="navbar navbar-expand-lg navbar-dark app-navbar" aria-label="Main navigation">
+  <nav class="navbar navbar-expand-xl navbar-dark app-navbar" aria-label="Main navigation">
     <div class="container-xl">
       <a class="navbar-brand" href="{{ url_for('main.dashboard') if current_user.is_authenticated else url_for('auth.login') }}">
         <img class="brand-logo" src="{{ url_for('static', filename='img/logo.svg') }}" width="30" height="30" alt="">
@@ -88,13 +88,13 @@
           </li>
           {% endif %}
         </ul>
-        <ul class="navbar-nav align-items-lg-center gap-lg-2">
+        <ul class="navbar-nav align-items-xl-center gap-xl-2">
           {% if is_clinical %}
           <li class="nav-item">
             {% if current_release %}
             <a class="release-pill" href="{{ url_for('knowledge.view_release', release_id=current_release.id) }}"
-               title="Current knowledge-base release">
-              <i class="bi bi-layers-fill" aria-hidden="true"></i><span class="visually-hidden">Current release: </span>{{ current_release.label }}
+               title="Current knowledge-base release: {{ current_release.label }}">
+              <i class="bi bi-layers-fill" aria-hidden="true"></i><span class="release-pill-label"><span class="visually-hidden">Current release: </span>{{ current_release.label }}</span>
             </a>
             {% else %}
             <a class="release-pill release-pill-none" href="{{ url_for('knowledge.releases') }}">
@@ -104,7 +104,8 @@
           </li>
           {% endif %}
           <li class="nav-item dropdown">
-            <a class="nav-link dropdown-toggle user-menu-toggle" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+            <a class="nav-link dropdown-toggle user-menu-toggle" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false"
+               title="{{ current_user.full_name }}">
               <i class="bi bi-person-circle" aria-hidden="true"></i><span class="user-menu-name">{{ current_user.full_name }}</span>
             </a>
             <ul class="dropdown-menu dropdown-menu-end user-menu">

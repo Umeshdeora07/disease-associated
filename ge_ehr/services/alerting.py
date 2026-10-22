@@ -117,6 +117,42 @@ def _current_alerts(
     return list(db.session.scalars(statement.order_by(Alert.id)))
 
 
+def current_alerts_by_patient(patient_ids: Iterable[int]) -> dict[int, list[Alert]]:
+    """The current alerts and notes of several patients in one query, per patient in id order.
+
+    For batch callers of :func:`reconcile_patient` (``current_alerts=``); at most a few hundred
+    patient ids per call.
+    """
+    grouped: dict[int, list[Alert]] = {patient_id: [] for patient_id in patient_ids}
+    if grouped:
+        statement = (
+            select(Alert)
+            .where(Alert.patient_id.in_(list(grouped)), Alert.status.in_(C.CURRENT_ALERT_STATUSES))
+            .order_by(Alert.id)
+        )
+        for alert in db.session.scalars(statement):
+            grouped[alert.patient_id].append(alert)
+    return grouped
+
+
+def _in_scope(
+    alerts: Iterable[Alert], variant_key_ids: frozenset[int] | None, rule_codes: frozenset[str] | None
+) -> list[Alert]:
+    """The still-current ``alerts`` within the scope (a preloaded list may hold alerts superseded since)."""
+    return [
+        alert
+        for alert in alerts
+        if alert.is_current
+        and (variant_key_ids is None or alert.variant_key_id in variant_key_ids)
+        and (rule_codes is None or alert.rule_code in rule_codes)
+    ]
+
+
+def _index_key(alert_or_finding: Alert | Finding) -> tuple[str, int, str]:
+    """The columns of the partial unique index on current alerts (rule code, variant key, kind)."""
+    return (alert_or_finding.rule_code, alert_or_finding.variant_key_id, alert_or_finding.kind)
+
+
 class _Reconciler:
     """State shared by the create / confirm / supersede steps of one :func:`reconcile_patient` call."""
 
@@ -278,6 +314,8 @@ def reconcile_patient(
     user: User | None = None,
     now: datetime | None = None,
     classified: Iterable[ClassifiedVariant] | None = None,
+    current_alerts: list[Alert] | None = None,
+    flush: bool = True,
 ) -> ReconcileResult:
     """Create, supersede or confirm the patient's alerts/notes so they match the desired findings.
 
@@ -285,6 +323,11 @@ def reconcile_patient(
     evaluated, and only current alerts in the same scope are compared (others are left alone).
     ``classified`` supplies the patient's classified variants; when None they are looked up
     under ``release`` with :func:`~ge_ehr.services.classification.classified_variants_for_patient`.
+    ``current_alerts`` supplies the patient's current alerts preloaded by a batch caller (e.g.
+    with :func:`current_alerts_by_patient`; any scope — they are filtered here) instead of one
+    query; created alerts are appended to it, so the list stays valid for further calls.
+    ``flush=False`` leaves the final flush to the caller. Either way a superseded row is flushed
+    before a replacement sharing its unique-index key is inserted.
     Created alerts get ``notify = (kind == "alert" and severity != "info")``, priority
     ``normal`` and ``is_reclassified=False`` (the re-evaluation engine adjusts these per change
     category). A current alert whose recommendation text differs from its finding's is
@@ -328,7 +371,11 @@ def reconcile_patient(
         now=now or utcnow(),
     )
     result = ReconcileResult(records_examined=len(variants))
-    current = {_alert_key(alert): alert for alert in _current_alerts(patient, key_scope, code_scope)}
+    if current_alerts is None:
+        in_scope = _current_alerts(patient, key_scope, code_scope)
+    else:
+        in_scope = _in_scope(current_alerts, key_scope, code_scope)
+    current = {_alert_key(alert): alert for alert in in_scope}
     to_create: list[Finding] = []
     to_replace: list[tuple[Alert, Finding]] = []
     for finding in findings:
@@ -356,8 +403,9 @@ def reconcile_patient(
             "replaced by a new alert.",
         )
         result.superseded.append(alert)
-    if result.superseded and (to_create or to_replace):
-        # A replacement (e.g. same rule and variant, new severity or text) may share the partial
+    superseded_keys = {_index_key(alert) for alert in result.superseded}
+    if to_replace or any(_index_key(finding) in superseded_keys for finding in to_create):
+        # A replacement (same rule, variant and kind; new severity or text) shares the partial
         # unique index key of a row superseded above, so that row must reach the database first.
         db.session.flush()
     result.created.extend(reconciler.create(finding) for finding in to_create)
@@ -365,7 +413,10 @@ def reconcile_patient(
         replacement = reconciler.create(finding, replaces=alert)
         result.created.append(replacement)
         result.revised.append((alert, replacement))
-    db.session.flush()
+    if current_alerts is not None:
+        current_alerts.extend(result.created)
+    if flush:
+        db.session.flush()
 
     logger.debug(
         "Reconciled patient %s (%s): %d created, %d superseded (%d revised), %d confirmed, %d unchanged, "
