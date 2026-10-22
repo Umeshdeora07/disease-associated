@@ -2,7 +2,7 @@
 
 > **Synthetic data only.** Synthea patients with documented clinical overrides and a synthetic ClinVar-format knowledge base — not real ClinVar data, not for clinical use.
 
-Generated 2026-10-21T03:26:51+00:00 by `python -m evaluation.run --scale 10000 --correctness 30 --seed 2026` in 79 s (Python 3.13.16, SQLite 3.45.1, SQLAlchemy 2.1.5, 4 CPUs, Linux-6.18.44-fc-v139-x86_64-with-glibc2.39). Raw numbers: [`results.json`](results.json); methodology: [`docs/EVALUATION.md`](../../docs/EVALUATION.md).
+Generated 2026-10-22T03:54:34+00:00 by `python -m evaluation.run --scale 10000 --correctness 30 --seed 2026` in 42 s (Python 3.13.16, SQLite 3.45.1, SQLAlchemy 2.1.5, 4 CPUs, Linux-6.18.44-fc-v140-x86_64-with-glibc2.39). Raw numbers: [`results.json`](results.json); methodology: [`docs/EVALUATION.md`](../../docs/EVALUATION.md).
 
 ## Table VI — measured (controlled change set, scale cohort of 10,000 patients)
 
@@ -15,7 +15,7 @@ Generated 2026-10-21T03:26:51+00:00 by `python -m evaluation.run --scale 10000 -
 | Notification recall | 0.0 % (0 / 158) | 100.0 % (158 / 158) | 100.0 % (158 / 158) |
 | Records examined | 0 | 17,309 (all 17,309) | 573 (changed only) |
 | Patients re-evaluated | 0 of 10,000 | 10,000 of 10,000 | 563 of 10,000 |
-| Time per release (10,000 patients), median [min–max] of 3 | 2.6 ms [2.4–3.3] | 6,685.4 ms [6,597.8–6,755.8] | 1,472.0 ms [1,425.5–1,543.7] |
+| Time per release (10,000 patients), median [min–max] of 3 | 3.2 ms [2.9–3.2] | 2,535.6 ms [2,162.1–2,555.2] | 388.3 ms [380.2–446.5] |
 | Point-in-time correctness (S1–S12, correctness cohort) | 100.0 % (12 / 12) | 100.0 % (12 / 12) | 100.0 % (12 / 12) |
 | `alerts_as_of` reproduces the pre-release state | 100.0 % (670 / 670) patients | 100.0 % (707 / 707) patients | 100.0 % (707 / 707) patients |
 | Final state equals ground truth | no | yes | yes |
@@ -38,7 +38,7 @@ Paper Table VI expectations met: **16 of 16**.
 | Records examined | Alert-once | 0 | 0 | yes |
 | Records examined | Full recomputation | all | 17,309 of 17,309 | yes |
 | Records examined | GE-EHR (change-driven) | changed only | 573 = records of the 134 changed stored keys | yes |
-| Time per release | GE-EHR (change-driven) | lower than full | median 1,472.0 ms vs 6,685.4 ms | yes |
+| Time per release | GE-EHR (change-driven) | lower than full | median 388.3 ms vs 2,535.6 ms | yes |
 | Point-in-time correctness | Alert-once | 100 % | 100.0 % (12 / 12) | yes |
 | Point-in-time correctness | Full recomputation | 100 % | 100.0 % (12 / 12) | yes |
 | Point-in-time correctness | GE-EHR (change-driven) | 100 % | 100.0 % (12 / 12) | yes |
@@ -53,7 +53,7 @@ Paper Table VI expectations met: **16 of 16**.
 | Notification precision | n/a (no notifications) | 100.0 % (39 / 39) | 100.0 % (39 / 39) |
 | Notification recall | 0.0 % (0 / 39) | 100.0 % (39 / 39) | 100.0 % (39 / 39) |
 | Records examined | 0 | 17,309 (all 17,309) | 5,178 (carriers of the revised rule's genes) |
-| Time per revision, median [min–max] of 3 | 7.5 ms [7.2–7.8] | 4,953.2 ms [4,933.0–4,956.8] | 2,468.5 ms [2,422.3–2,516.1] |
+| Time per revision, median [min–max] of 3 | 8.6 ms [8.5–10.1] | 1,639.6 ms [1,590.0–1,764.8] | 470.2 ms [454.0–630.7] |
 | `alerts_as_of` reproduces the pre-revision state | 100.0 % (670 / 670) patients | 100.0 % (707 / 707) patients | 100.0 % (707 / 707) patients |
 | Final state equals ground truth | no | yes | yes |
 
@@ -72,7 +72,7 @@ The rule revision follows the release, so its ground truth is K_new + rules v2; 
 
 ## Correctness cohort (Table V scenarios)
 
-**Correctness cohort:** 30 patients (2 families, 6 patients in families), 29 carriers of 23 selected variants, 54 patient-variant records over 39 distinct keys; 52 clinical overrides on 29 patients (listed in `results.json`). Loaded via VCF upload (F1) — import old release 616 ms, create patients and ingest vcfs 440 ms, import new release 483 ms. Initial state equals the ground truth under K_old + rules v1: yes (38 findings).
+**Correctness cohort:** 30 patients (2 families, 6 patients in families), 29 carriers of 23 selected variants, 54 patient-variant records over 39 distinct keys; 52 clinical overrides on 29 patients (listed in `results.json`). Loaded via VCF upload (F1) — import old release 999 ms, create patients and ingest vcfs 701 ms, import new release 1,009 ms. Initial state equals the ground truth under K_old + rules v1: yes (38 findings).
 
 | Metric | Alert-once | Full recomputation | GE-EHR (change-driven) |
 |---|---|---|---|
@@ -83,7 +83,7 @@ The rule revision follows the release, so its ground truth is K_new + rules v2; 
 | Notification recall | 0.0 % (0 / 16) | 100.0 % (16 / 16) | 100.0 % (16 / 16) |
 | Records examined | 0 | 54 (all 54) | 16 (changed only) |
 | Patients re-evaluated | 0 of 30 | 30 of 30 | 16 of 30 |
-| Time per release (30 patients) | 2.4 ms | 214.8 ms | 108.0 ms |
+| Time per release (30 patients) | 2.8 ms | 245.4 ms | 72.2 ms |
 | Point-in-time correctness (S1–S12, correctness cohort) | 100.0 % (12 / 12) | 100.0 % (12 / 12) | 100.0 % (12 / 12) |
 | `alerts_as_of` reproduces the pre-release state | 100.0 % (30 / 30) patients | 100.0 % (30 / 30) patients | 100.0 % (30 / 30) patients |
 | Final state equals ground truth | no | yes | yes |
@@ -101,7 +101,7 @@ The rule revision follows the release, so its ground truth is K_new + rules v2; 
 | S9 | Only benign variants | No alert | pass: as of T0: none | pass: as of T0: none | pass: as of T0: none |
 | S10 | Malformed VCF | Rejected | pass: rejected: Line 12: POS must be a positive whole number, found '12O994300'. | pass: rejected: Line 12: POS must be a positive whole number, found '12O994300'. | pass: rejected: Line 12: POS must be a positive whole number, found '12O994300'. |
 | S11 | FHIR export of S1 patient | Valid FHIR R4 Bundle | pass: valid Bundle with 5 entries | pass: valid Bundle with 5 entries | pass: valid Bundle with 5 entries |
-| S12 | Lab technician opens recommendations | Access denied | pass: lab technician 403, clinician 500 (page error after the access check) | pass: lab technician 403, clinician 500 (page error after the access check) | pass: lab technician 403, clinician 500 (page error after the access check) |
+| S12 | Lab technician opens recommendations | Access denied | pass: lab technician 403, clinician 200 | pass: lab technician 403, clinician 200 | pass: lab technician 403, clinician 200 |
 | RS1 | HNF1A VUS (S8) upgraded to LP; patient on insulin | New high alert D2, reclassified | FAIL: current: D6 info alert; reclassified/high priority/notify: False; D6 superseded: False | pass: current: D2 high alert, D5 low alert; reclassified/high priority/notify: True; D6 superseded: True | pass: current: D2 high alert, D5 low alert; reclassified/high priority/notify: True; D6 superseded: True |
 | RS2 | GCK LP downgraded to VUS | Alert superseded; review notice | FAIL: superseded [] (unexpected); review notices: 0; current: D1 medium alert, D5 low alert; FHIR status: ['final'] | pass: superseded ['D1', 'D5'] (downgrade); review notices: 1; current: D6 info alert; FHIR status: ['amended'] | pass: superseded ['D1', 'D5'] (downgrade); review notices: 1; current: D6 info alert; FHIR status: ['amended'] |
 | RS3 | HNF4A LP changed to P | Provenance updated; no notice | FAIL: current: D3 medium alert, D5 low alert; same alerts: True; confirmed under Synthetic K_new (2026-01, controlled change set): False; notifications: False | pass: current: D3 medium alert, D5 low alert; same alerts: True; confirmed under Synthetic K_new (2026-01, controlled change set): True; notifications: False | pass: current: D3 medium alert, D5 low alert; same alerts: True; confirmed under Synthetic K_new (2026-01, controlled change set): True; notifications: False |
@@ -114,7 +114,7 @@ S1–S9 are checked with `alerts_as_of(patient, T0)` after both knowledge change
 
 ## Cohorts
 
-**Scale cohort:** 10,000 patients (120 families, 445 patients in families), 910 carriers of 585 selected variants, 17,309 patient-variant records over 633 distinct keys; 1,256 clinical overrides on 731 patients (listed in `results.json`). Loaded via bulk insert + first activation of K_old — import old release 549 ms, bulk load 1,232 ms, initial activation 15,520 ms, import new release 595 ms. Initial state equals the ground truth under K_old + rules v1: yes (883 findings).
+**Scale cohort:** 10,000 patients (120 families, 445 patients in families), 910 carriers of 585 selected variants, 17,309 patient-variant records over 633 distinct keys; 1,256 clinical overrides on 731 patients (listed in `results.json`). Loaded via bulk insert + first activation of K_old — import old release 983 ms, bulk load 1,580 ms, initial activation 4,296 ms, import new release 749 ms. Initial state equals the ground truth under K_old + rules v1: yes (883 findings).
 
 ## Knowledge changes
 
@@ -156,9 +156,9 @@ The background polymorphism `11-17385325-CAGT-C` (likely benign → benign) is o
 
 | Strategy | Release runs (ms) | Rule revision runs (ms) | Outcomes identical across runs |
 |---|---|---|---|
-| Alert-once | 2.6, 3.3, 2.4 | 7.8, 7.5, 7.2 | yes |
-| Full recomputation | 6,597.8, 6,755.8, 6,685.4 | 4,956.8, 4,953.2, 4,933.0 | yes |
-| GE-EHR (change-driven) | 1,472.0, 1,425.5, 1,543.7 | 2,422.3, 2,516.1, 2,468.5 | yes |
+| Alert-once | 3.2, 3.2, 2.9 | 8.5, 10.1, 8.6 | yes |
+| Full recomputation | 2,535.6, 2,162.1, 2,555.2 | 1,590.0, 1,764.8, 1,639.6 | yes |
+| GE-EHR (change-driven) | 388.3, 380.2, 446.5 | 454.0, 630.7, 470.2 | yes |
 
 ## Real ClinVar release pair
 

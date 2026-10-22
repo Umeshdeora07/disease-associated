@@ -280,7 +280,7 @@ On the 10,000-patient cohort, the release K_old → K_new changes 134 of the 633
 | Stale alerts after release | 120 (all 120 affected) | 0 | 0 |
 | Notification precision / recall | n/a / 0 % | 100 % / 100 % (158) | 100 % / 100 % (158) |
 | Records examined | 0 | 17,309 (all) | 573 (changed only) |
-| Time per release, median of 3 | 2.6 ms | 6,685 ms | 1,472 ms (4.5× faster) |
+| Time per release, median of 3 | 3.2 ms | 2,536 ms | 388 ms (6.5× faster) |
 | Point-in-time correctness (S1–S12) | 100 % | 100 % | 100 % |
 
 Full recomputation and GE-EHR both reach exactly the ground-truth state after the release and

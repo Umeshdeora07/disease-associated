@@ -32,6 +32,14 @@ reviews recommendations), **lab technician** (uploads VCF files; cannot see reco
 
 Everything can be done in the **browser** (http://localhost:5000) or in the **terminal**.
 
+| Dashboard | Recommendations after a reclassification |
+|---|---|
+| ![Dashboard](docs/screenshots/02-dashboard.png) | ![Recommendations](docs/screenshots/04-recommendations.png) |
+| **Alerts inbox** (filtered: reclassified) | **Review notice** after a downgrade |
+| ![Alerts inbox](docs/screenshots/05-alerts-inbox.png) | ![Review notice](docs/screenshots/06-review-notice.png) |
+
+More screenshots (login, patient page, re-evaluation runs, rules) are in [docs/screenshots](docs/screenshots).
+
 ---
 
 ## 1. Install (one time)
@@ -183,7 +191,7 @@ Results go to `evaluation/results/RESULTS.md` (and `results.json`); the method i
 | Stale alerts after a release | all affected | 0 | 0 |
 | Notification precision | — | 100 % | 100 % |
 | Records examined | 0 | all (17,309) | changed only (573) |
-| Time per release | — | ≈ 6.7 s | ≈ 1.5 s |
+| Time per release | — | ≈ 2.5 s | ≈ 0.4 s |
 | Point-in-time correctness (S1–S12) | 100 % | 100 % | 100 % |
 
 All 16 expectations of the paper's Table VI are met. The knowledge-base changes are synthetic

@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-10-21T03:26:51+00:00",
-  "duration_s": 78.7,
+  "generated_at": "2026-10-22T03:54:34+00:00",
+  "duration_s": 41.8,
   "command": "python -m evaluation.run --scale 10000 --correctness 30 --seed 2026",
   "synthetic_data_only": true,
   "options": {
@@ -16,10 +16,10 @@
     "sqlite": "3.45.1",
     "sqlalchemy": "2.1.5",
     "flask": "3.1.3",
-    "platform": "Linux-6.18.44-fc-v139-x86_64-with-glibc2.39",
+    "platform": "Linux-6.18.44-fc-v140-x86_64-with-glibc2.39",
     "machine": "x86_64",
     "cpu_count": 4,
-    "date": "2026-10-21T03:28:09+00:00"
+    "date": "2026-10-22T03:55:15+00:00"
   },
   "cohort_sources": {
     "correctness": {
@@ -2332,9 +2332,9 @@
         "baseline": {
           "ingest": "vcf",
           "timings_ms": {
-            "import_old_release": 615.975,
-            "create_patients_and_ingest_vcfs": 439.685,
-            "import_new_release": 482.712
+            "import_old_release": 999.052,
+            "create_patients_and_ingest_vcfs": 700.736,
+            "import_new_release": 1009.05
           },
           "counts": {
             "patients": 30,
@@ -2708,17 +2708,17 @@
               "patients_reevaluated": 0,
               "stored_keys_compared": null,
               "changed_variants": null,
-              "duration_ms": 2.355,
-              "commit_ms": 7.641,
+              "duration_ms": 2.826,
+              "commit_ms": 14.677,
               "engine_duration_ms": null,
               "delta": null,
               "timing_ms": {
                 "runs": [
-                  2.355
+                  2.826
                 ],
-                "median": 2.355,
-                "min": 2.355,
-                "max": 2.355
+                "median": 2.826,
+                "min": 2.826,
+                "max": 2.826
               }
             },
             "rule_revision": {
@@ -2771,28 +2771,28 @@
               "patients_reevaluated": 0,
               "stored_keys_compared": null,
               "changed_variants": null,
-              "duration_ms": 8.082,
-              "commit_ms": 1.853,
+              "duration_ms": 15.122,
+              "commit_ms": 4.882,
               "engine_duration_ms": null,
               "timing_ms": {
                 "runs": [
-                  8.082
+                  15.122
                 ],
-                "median": 8.082,
-                "min": 8.082,
-                "max": 8.082
+                "median": 15.122,
+                "min": 15.122,
+                "max": 15.122
               }
             },
             "as_of": {
               "before_release": {
-                "at": "2026-10-21T03:26:55.338391",
+                "at": "2026-10-22T03:54:40.548712",
                 "patients_checked": 30,
                 "patients_matching": 30,
                 "matches": true,
                 "mismatches": []
               },
               "before_rule_revision": {
-                "at": "2026-10-21T03:26:55.395040",
+                "at": "2026-10-22T03:54:40.635385",
                 "patients_checked": 30,
                 "patients_matching": 30,
                 "matches": true,
@@ -2803,14 +2803,14 @@
             "runs": [
               {
                 "release": {
-                  "duration_ms": 2.355,
-                  "commit_ms": 7.641,
+                  "duration_ms": 2.826,
+                  "commit_ms": 14.677,
                   "records_examined": 0,
                   "run": null
                 },
                 "rule_revision": {
-                  "duration_ms": 8.082,
-                  "commit_ms": 1.853,
+                  "duration_ms": 15.122,
+                  "commit_ms": 4.882,
                   "records_examined": 0,
                   "run": null
                 }
@@ -2887,7 +2887,7 @@
                 "code": "S12",
                 "passed": true,
                 "expected": "lab technician 403 (clinician not denied)",
-                "observed": "lab technician 403, clinician 500 (page error after the access check)"
+                "observed": "lab technician 403, clinician 200"
               },
               {
                 "code": "RS1",
@@ -2978,9 +2978,9 @@
               "patients_reevaluated": 30,
               "stored_keys_compared": 39,
               "changed_variants": 12,
-              "duration_ms": 214.818,
-              "commit_ms": 12.805,
-              "engine_duration_ms": 211.2,
+              "duration_ms": 245.407,
+              "commit_ms": 20.186,
+              "engine_duration_ms": 239.288,
               "delta": {
                 "expected": 12,
                 "recorded": 12,
@@ -2991,11 +2991,11 @@
               },
               "timing_ms": {
                 "runs": [
-                  214.818
+                  245.407
                 ],
-                "median": 214.818,
-                "min": 214.818,
-                "max": 214.818
+                "median": 245.407,
+                "min": 245.407,
+                "max": 245.407
               }
             },
             "rule_revision": {
@@ -3036,28 +3036,28 @@
               "patients_reevaluated": 30,
               "stored_keys_compared": 0,
               "changed_variants": 0,
-              "duration_ms": 53.481,
-              "commit_ms": 3.467,
-              "engine_duration_ms": 50.745,
+              "duration_ms": 37.082,
+              "commit_ms": 5.057,
+              "engine_duration_ms": 33.919,
               "timing_ms": {
                 "runs": [
-                  53.481
+                  37.082
                 ],
-                "median": 53.481,
-                "min": 53.481,
-                "max": 53.481
+                "median": 37.082,
+                "min": 37.082,
+                "max": 37.082
               }
             },
             "as_of": {
               "before_release": {
-                "at": "2026-10-21T03:26:55.338391",
+                "at": "2026-10-22T03:54:40.548712",
                 "patients_checked": 30,
                 "patients_matching": 30,
                 "matches": true,
                 "mismatches": []
               },
               "before_rule_revision": {
-                "at": "2026-10-21T03:26:55.973389",
+                "at": "2026-10-22T03:54:41.562861",
                 "patients_checked": 30,
                 "patients_matching": 30,
                 "matches": true,
@@ -3068,8 +3068,8 @@
             "runs": [
               {
                 "release": {
-                  "duration_ms": 214.818,
-                  "commit_ms": 12.805,
+                  "duration_ms": 245.407,
+                  "commit_ms": 20.186,
                   "records_examined": 54,
                   "run": {
                     "stored_keys_compared": 39,
@@ -3087,7 +3087,7 @@
                     "strategy": "full",
                     "trigger": "clinvar_release",
                     "status": "success",
-                    "engine_duration_ms": 211.200123000026,
+                    "engine_duration_ms": 239.28772199997184,
                     "categories": {
                       "upgrade": {
                         "changed_variants": 4,
@@ -3138,8 +3138,8 @@
                   }
                 },
                 "rule_revision": {
-                  "duration_ms": 53.481,
-                  "commit_ms": 3.467,
+                  "duration_ms": 37.082,
+                  "commit_ms": 5.057,
                   "records_examined": 54,
                   "run": {
                     "stored_keys_compared": 0,
@@ -3157,7 +3157,7 @@
                     "strategy": "full",
                     "trigger": "rule_revision",
                     "status": "success",
-                    "engine_duration_ms": 50.7453949999217,
+                    "engine_duration_ms": 33.918560000529396,
                     "rules": {
                       "D4": {
                         "alerts_created": 1,
@@ -3244,7 +3244,7 @@
                 "code": "S12",
                 "passed": true,
                 "expected": "lab technician 403 (clinician not denied)",
-                "observed": "lab technician 403, clinician 500 (page error after the access check)"
+                "observed": "lab technician 403, clinician 200"
               },
               {
                 "code": "RS1",
@@ -3335,9 +3335,9 @@
               "patients_reevaluated": 16,
               "stored_keys_compared": 39,
               "changed_variants": 12,
-              "duration_ms": 107.961,
-              "commit_ms": 9.484,
-              "engine_duration_ms": 103.726,
+              "duration_ms": 72.188,
+              "commit_ms": 19.346,
+              "engine_duration_ms": 67.33,
               "delta": {
                 "expected": 12,
                 "recorded": 12,
@@ -3348,11 +3348,11 @@
               },
               "timing_ms": {
                 "runs": [
-                  107.961
+                  72.188
                 ],
-                "median": 107.961,
-                "min": 107.961,
-                "max": 107.961
+                "median": 72.188,
+                "min": 72.188,
+                "max": 72.188
               }
             },
             "rule_revision": {
@@ -3393,28 +3393,28 @@
               "patients_reevaluated": 10,
               "stored_keys_compared": 0,
               "changed_variants": 0,
-              "duration_ms": 37.989,
-              "commit_ms": 3.45,
-              "engine_duration_ms": 35.461,
+              "duration_ms": 22.75,
+              "commit_ms": 4.874,
+              "engine_duration_ms": 20.55,
               "timing_ms": {
                 "runs": [
-                  37.989
+                  22.75
                 ],
-                "median": 37.989,
-                "min": 37.989,
-                "max": 37.989
+                "median": 22.75,
+                "min": 22.75,
+                "max": 22.75
               }
             },
             "as_of": {
               "before_release": {
-                "at": "2026-10-21T03:26:55.338391",
+                "at": "2026-10-22T03:54:40.548712",
                 "patients_checked": 30,
                 "patients_matching": 30,
                 "matches": true,
                 "mismatches": []
               },
               "before_rule_revision": {
-                "at": "2026-10-21T03:26:56.443760",
+                "at": "2026-10-22T03:54:42.252933",
                 "patients_checked": 30,
                 "patients_matching": 30,
                 "matches": true,
@@ -3425,8 +3425,8 @@
             "runs": [
               {
                 "release": {
-                  "duration_ms": 107.961,
-                  "commit_ms": 9.484,
+                  "duration_ms": 72.188,
+                  "commit_ms": 19.346,
                   "records_examined": 16,
                   "run": {
                     "stored_keys_compared": 39,
@@ -3444,7 +3444,7 @@
                     "strategy": "change_driven",
                     "trigger": "clinvar_release",
                     "status": "success",
-                    "engine_duration_ms": 103.72572100004618,
+                    "engine_duration_ms": 67.32993299920054,
                     "categories": {
                       "upgrade": {
                         "changed_variants": 4,
@@ -3495,8 +3495,8 @@
                   }
                 },
                 "rule_revision": {
-                  "duration_ms": 37.989,
-                  "commit_ms": 3.45,
+                  "duration_ms": 22.75,
+                  "commit_ms": 4.874,
                   "records_examined": 10,
                   "run": {
                     "stored_keys_compared": 0,
@@ -3514,7 +3514,7 @@
                     "strategy": "change_driven",
                     "trigger": "rule_revision",
                     "status": "success",
-                    "engine_duration_ms": 35.46102400014206,
+                    "engine_duration_ms": 20.549693999782903,
                     "rules": {
                       "D4": {
                         "alerts_created": 1,
@@ -3601,7 +3601,7 @@
                 "code": "S12",
                 "passed": true,
                 "expected": "lab technician 403 (clinician not denied)",
-                "observed": "lab technician 403, clinician 500 (page error after the access check)"
+                "observed": "lab technician 403, clinician 200"
               },
               {
                 "code": "RS1",
@@ -4442,10 +4442,10 @@
         "baseline": {
           "ingest": "bulk",
           "timings_ms": {
-            "import_old_release": 549.295,
-            "bulk_load": 1232.087,
-            "initial_activation": 15519.631,
-            "import_new_release": 594.678
+            "import_old_release": 983.418,
+            "bulk_load": 1579.755,
+            "initial_activation": 4295.673,
+            "import_new_release": 749.42
           },
           "counts": {
             "patients": 10000,
@@ -4819,19 +4819,19 @@
               "patients_reevaluated": 0,
               "stored_keys_compared": null,
               "changed_variants": null,
-              "duration_ms": 2.607,
-              "commit_ms": 14.483,
+              "duration_ms": 3.209,
+              "commit_ms": 24.126,
               "engine_duration_ms": null,
               "delta": null,
               "timing_ms": {
                 "runs": [
-                  2.607,
-                  3.34,
-                  2.444
+                  3.209,
+                  3.229,
+                  2.856
                 ],
-                "median": 2.607,
-                "min": 2.444,
-                "max": 3.34
+                "median": 3.209,
+                "min": 2.856,
+                "max": 3.229
               }
             },
             "rule_revision": {
@@ -4884,30 +4884,30 @@
               "patients_reevaluated": 0,
               "stored_keys_compared": null,
               "changed_variants": null,
-              "duration_ms": 7.816,
-              "commit_ms": 1.851,
+              "duration_ms": 8.543,
+              "commit_ms": 5.126,
               "engine_duration_ms": null,
               "timing_ms": {
                 "runs": [
-                  7.816,
-                  7.505,
-                  7.228
+                  8.543,
+                  10.082,
+                  8.585
                 ],
-                "median": 7.505,
-                "min": 7.228,
-                "max": 7.816
+                "median": 8.585,
+                "min": 8.543,
+                "max": 10.082
               }
             },
             "as_of": {
               "before_release": {
-                "at": "2026-10-21T03:27:15.390637",
+                "at": "2026-10-22T03:54:51.518322",
                 "patients_checked": 670,
                 "patients_matching": 670,
                 "matches": true,
                 "mismatches": []
               },
               "before_rule_revision": {
-                "at": "2026-10-21T03:27:15.486010",
+                "at": "2026-10-22T03:54:51.634372",
                 "patients_checked": 670,
                 "patients_matching": 670,
                 "matches": true,
@@ -4918,42 +4918,42 @@
             "runs": [
               {
                 "release": {
-                  "duration_ms": 2.607,
-                  "commit_ms": 14.483,
+                  "duration_ms": 3.209,
+                  "commit_ms": 24.126,
                   "records_examined": 0,
                   "run": null
                 },
                 "rule_revision": {
-                  "duration_ms": 7.816,
-                  "commit_ms": 1.851,
+                  "duration_ms": 8.543,
+                  "commit_ms": 5.126,
                   "records_examined": 0,
                   "run": null
                 }
               },
               {
                 "release": {
-                  "duration_ms": 3.34,
-                  "commit_ms": 13.823,
+                  "duration_ms": 3.229,
+                  "commit_ms": 27.227,
                   "records_examined": 0,
                   "run": null
                 },
                 "rule_revision": {
-                  "duration_ms": 7.505,
-                  "commit_ms": 2.267,
+                  "duration_ms": 10.082,
+                  "commit_ms": 4.023,
                   "records_examined": 0,
                   "run": null
                 }
               },
               {
                 "release": {
-                  "duration_ms": 2.444,
-                  "commit_ms": 15.874,
+                  "duration_ms": 2.856,
+                  "commit_ms": 17.441,
                   "records_examined": 0,
                   "run": null
                 },
                 "rule_revision": {
-                  "duration_ms": 7.228,
-                  "commit_ms": 2.234,
+                  "duration_ms": 8.585,
+                  "commit_ms": 4.542,
                   "records_examined": 0,
                   "run": null
                 }
@@ -5000,9 +5000,9 @@
               "patients_reevaluated": 10000,
               "stored_keys_compared": 633,
               "changed_variants": 134,
-              "duration_ms": 6597.765,
-              "commit_ms": 21.619,
-              "engine_duration_ms": 6593.297,
+              "duration_ms": 2535.594,
+              "commit_ms": 32.014,
+              "engine_duration_ms": 2530.236,
               "delta": {
                 "expected": 134,
                 "recorded": 134,
@@ -5013,13 +5013,13 @@
               },
               "timing_ms": {
                 "runs": [
-                  6597.765,
-                  6755.849,
-                  6685.376
+                  2535.594,
+                  2162.073,
+                  2555.233
                 ],
-                "median": 6685.376,
-                "min": 6597.765,
-                "max": 6755.849
+                "median": 2535.594,
+                "min": 2162.073,
+                "max": 2555.233
               }
             },
             "rule_revision": {
@@ -5060,30 +5060,30 @@
               "patients_reevaluated": 10000,
               "stored_keys_compared": 0,
               "changed_variants": 0,
-              "duration_ms": 4956.84,
-              "commit_ms": 5.962,
-              "engine_duration_ms": 4954.048,
+              "duration_ms": 1589.95,
+              "commit_ms": 6.22,
+              "engine_duration_ms": 1586.569,
               "timing_ms": {
                 "runs": [
-                  4956.84,
-                  4953.185,
-                  4933.035
+                  1589.95,
+                  1764.846,
+                  1639.584
                 ],
-                "median": 4953.185,
-                "min": 4933.035,
-                "max": 4956.84
+                "median": 1639.584,
+                "min": 1589.95,
+                "max": 1764.846
               }
             },
             "as_of": {
               "before_release": {
-                "at": "2026-10-21T03:27:15.390637",
+                "at": "2026-10-22T03:54:51.518322",
                 "patients_checked": 707,
                 "patients_matching": 707,
                 "matches": true,
                 "mismatches": []
               },
               "before_rule_revision": {
-                "at": "2026-10-21T03:27:24.188872",
+                "at": "2026-10-22T03:54:56.680769",
                 "patients_checked": 707,
                 "patients_matching": 707,
                 "matches": true,
@@ -5094,8 +5094,8 @@
             "runs": [
               {
                 "release": {
-                  "duration_ms": 6597.765,
-                  "commit_ms": 21.619,
+                  "duration_ms": 2535.594,
+                  "commit_ms": 32.014,
                   "records_examined": 17309,
                   "run": {
                     "stored_keys_compared": 633,
@@ -5113,7 +5113,7 @@
                     "strategy": "full",
                     "trigger": "clinvar_release",
                     "status": "success",
-                    "engine_duration_ms": 6593.296517999988,
+                    "engine_duration_ms": 2530.23637699971,
                     "categories": {
                       "upgrade": {
                         "changed_variants": 50,
@@ -5164,8 +5164,8 @@
                   }
                 },
                 "rule_revision": {
-                  "duration_ms": 4956.84,
-                  "commit_ms": 5.962,
+                  "duration_ms": 1589.95,
+                  "commit_ms": 6.22,
                   "records_examined": 17309,
                   "run": {
                     "stored_keys_compared": 0,
@@ -5183,7 +5183,7 @@
                     "strategy": "full",
                     "trigger": "rule_revision",
                     "status": "success",
-                    "engine_duration_ms": 4954.048358000136,
+                    "engine_duration_ms": 1586.568509999779,
                     "rules": {
                       "D4": {
                         "alerts_created": 39,
@@ -5200,8 +5200,8 @@
               },
               {
                 "release": {
-                  "duration_ms": 6755.849,
-                  "commit_ms": 21.302,
+                  "duration_ms": 2162.073,
+                  "commit_ms": 28.205,
                   "records_examined": 17309,
                   "run": {
                     "stored_keys_compared": 633,
@@ -5219,7 +5219,7 @@
                     "strategy": "full",
                     "trigger": "clinvar_release",
                     "status": "success",
-                    "engine_duration_ms": 6750.765881999996,
+                    "engine_duration_ms": 2156.67275099986,
                     "categories": {
                       "upgrade": {
                         "changed_variants": 50,
@@ -5270,8 +5270,8 @@
                   }
                 },
                 "rule_revision": {
-                  "duration_ms": 4953.185,
-                  "commit_ms": 5.546,
+                  "duration_ms": 1764.846,
+                  "commit_ms": 7.416,
                   "records_examined": 17309,
                   "run": {
                     "stored_keys_compared": 0,
@@ -5289,7 +5289,7 @@
                     "strategy": "full",
                     "trigger": "rule_revision",
                     "status": "success",
-                    "engine_duration_ms": 4950.392205999833,
+                    "engine_duration_ms": 1761.5880399998787,
                     "rules": {
                       "D4": {
                         "alerts_created": 39,
@@ -5306,8 +5306,8 @@
               },
               {
                 "release": {
-                  "duration_ms": 6685.376,
-                  "commit_ms": 20.164,
+                  "duration_ms": 2555.233,
+                  "commit_ms": 25.019,
                   "records_examined": 17309,
                   "run": {
                     "stored_keys_compared": 633,
@@ -5325,7 +5325,7 @@
                     "strategy": "full",
                     "trigger": "clinvar_release",
                     "status": "success",
-                    "engine_duration_ms": 6679.55906200018,
+                    "engine_duration_ms": 2548.1084969997028,
                     "categories": {
                       "upgrade": {
                         "changed_variants": 50,
@@ -5376,8 +5376,8 @@
                   }
                 },
                 "rule_revision": {
-                  "duration_ms": 4933.035,
-                  "commit_ms": 5.028,
+                  "duration_ms": 1639.584,
+                  "commit_ms": 9.296,
                   "records_examined": 17309,
                   "run": {
                     "stored_keys_compared": 0,
@@ -5395,7 +5395,7 @@
                     "strategy": "full",
                     "trigger": "rule_revision",
                     "status": "success",
-                    "engine_duration_ms": 4929.923852000002,
+                    "engine_duration_ms": 1636.3279680008418,
                     "rules": {
                       "D4": {
                         "alerts_created": 39,
@@ -5452,9 +5452,9 @@
               "patients_reevaluated": 563,
               "stored_keys_compared": 633,
               "changed_variants": 134,
-              "duration_ms": 1471.965,
-              "commit_ms": 21.565,
-              "engine_duration_ms": 1466.122,
+              "duration_ms": 388.314,
+              "commit_ms": 31.093,
+              "engine_duration_ms": 383.64,
               "delta": {
                 "expected": 134,
                 "recorded": 134,
@@ -5465,13 +5465,13 @@
               },
               "timing_ms": {
                 "runs": [
-                  1471.965,
-                  1425.54,
-                  1543.714
+                  388.314,
+                  380.236,
+                  446.452
                 ],
-                "median": 1471.965,
-                "min": 1425.54,
-                "max": 1543.714
+                "median": 388.314,
+                "min": 380.236,
+                "max": 446.452
               }
             },
             "rule_revision": {
@@ -5512,30 +5512,30 @@
               "patients_reevaluated": 4458,
               "stored_keys_compared": 0,
               "changed_variants": 0,
-              "duration_ms": 2422.314,
-              "commit_ms": 5.319,
-              "engine_duration_ms": 2419.568,
+              "duration_ms": 453.962,
+              "commit_ms": 8.672,
+              "engine_duration_ms": 450.787,
               "timing_ms": {
                 "runs": [
-                  2422.314,
-                  2516.08,
-                  2468.47
+                  453.962,
+                  630.724,
+                  470.156
                 ],
-                "median": 2468.47,
-                "min": 2422.314,
-                "max": 2516.08
+                "median": 470.156,
+                "min": 453.962,
+                "max": 630.724
               }
             },
             "as_of": {
               "before_release": {
-                "at": "2026-10-21T03:27:15.390637",
+                "at": "2026-10-22T03:54:51.518322",
                 "patients_checked": 707,
                 "patients_matching": 707,
                 "matches": true,
                 "mismatches": []
               },
               "before_rule_revision": {
-                "at": "2026-10-21T03:27:32.758960",
+                "at": "2026-10-22T03:55:01.403360",
                 "patients_checked": 707,
                 "patients_matching": 707,
                 "matches": true,
@@ -5546,8 +5546,8 @@
             "runs": [
               {
                 "release": {
-                  "duration_ms": 1471.965,
-                  "commit_ms": 21.565,
+                  "duration_ms": 388.314,
+                  "commit_ms": 31.093,
                   "records_examined": 573,
                   "run": {
                     "stored_keys_compared": 633,
@@ -5565,7 +5565,7 @@
                     "strategy": "change_driven",
                     "trigger": "clinvar_release",
                     "status": "success",
-                    "engine_duration_ms": 1466.12201500011,
+                    "engine_duration_ms": 383.63963999927364,
                     "categories": {
                       "upgrade": {
                         "changed_variants": 50,
@@ -5616,8 +5616,8 @@
                   }
                 },
                 "rule_revision": {
-                  "duration_ms": 2422.314,
-                  "commit_ms": 5.319,
+                  "duration_ms": 453.962,
+                  "commit_ms": 8.672,
                   "records_examined": 5178,
                   "run": {
                     "stored_keys_compared": 0,
@@ -5635,7 +5635,7 @@
                     "strategy": "change_driven",
                     "trigger": "rule_revision",
                     "status": "success",
-                    "engine_duration_ms": 2419.5675619998838,
+                    "engine_duration_ms": 450.7866530002502,
                     "rules": {
                       "D4": {
                         "alerts_created": 39,
@@ -5652,8 +5652,8 @@
               },
               {
                 "release": {
-                  "duration_ms": 1425.54,
-                  "commit_ms": 20.212,
+                  "duration_ms": 380.236,
+                  "commit_ms": 31.864,
                   "records_examined": 573,
                   "run": {
                     "stored_keys_compared": 633,
@@ -5671,7 +5671,7 @@
                     "strategy": "change_driven",
                     "trigger": "clinvar_release",
                     "status": "success",
-                    "engine_duration_ms": 1421.2611100001595,
+                    "engine_duration_ms": 375.34962199970323,
                     "categories": {
                       "upgrade": {
                         "changed_variants": 50,
@@ -5722,8 +5722,8 @@
                   }
                 },
                 "rule_revision": {
-                  "duration_ms": 2516.08,
-                  "commit_ms": 7.574,
+                  "duration_ms": 630.724,
+                  "commit_ms": 9.021,
                   "records_examined": 5178,
                   "run": {
                     "stored_keys_compared": 0,
@@ -5741,7 +5741,7 @@
                     "strategy": "change_driven",
                     "trigger": "rule_revision",
                     "status": "success",
-                    "engine_duration_ms": 2512.68729100002,
+                    "engine_duration_ms": 627.0319280001786,
                     "rules": {
                       "D4": {
                         "alerts_created": 39,
@@ -5758,8 +5758,8 @@
               },
               {
                 "release": {
-                  "duration_ms": 1543.714,
-                  "commit_ms": 19.978,
+                  "duration_ms": 446.452,
+                  "commit_ms": 33.151,
                   "records_examined": 573,
                   "run": {
                     "stored_keys_compared": 633,
@@ -5777,7 +5777,7 @@
                     "strategy": "change_driven",
                     "trigger": "clinvar_release",
                     "status": "success",
-                    "engine_duration_ms": 1539.009458999999,
+                    "engine_duration_ms": 440.6442489998881,
                     "categories": {
                       "upgrade": {
                         "changed_variants": 50,
@@ -5828,8 +5828,8 @@
                   }
                 },
                 "rule_revision": {
-                  "duration_ms": 2468.47,
-                  "commit_ms": 5.859,
+                  "duration_ms": 470.156,
+                  "commit_ms": 8.108,
                   "records_examined": 5178,
                   "run": {
                     "stored_keys_compared": 0,
@@ -5847,7 +5847,7 @@
                     "strategy": "change_driven",
                     "trigger": "rule_revision",
                     "status": "success",
-                    "engine_duration_ms": 2465.7214239998666,
+                    "engine_duration_ms": 466.41567799997574,
                     "rules": {
                       "D4": {
                         "alerts_created": 39,
@@ -23778,7 +23778,7 @@
         "metric": "Time per release",
         "strategy": "change_driven",
         "expected": "lower than full",
-        "measured": "median 1,472.0 ms vs 6,685.4 ms",
+        "measured": "median 388.3 ms vs 2,535.6 ms",
         "met": true
       },
       {
