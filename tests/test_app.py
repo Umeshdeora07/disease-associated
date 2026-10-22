@@ -531,13 +531,41 @@ def test_vendored_versions_and_licenses() -> None:
     assert (vendor / "bootstrap/LICENSE").is_file() and (vendor / "bootstrap-icons/LICENSE").is_file()
 
 
+CSS_STRING = re.compile(r""""(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'""")
+CSS_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
+CSS_TOKEN = re.compile(f"{CSS_STRING.pattern}|{CSS_COMMENT.pattern}", re.DOTALL)
+
+
+def css_code(css: str) -> str:
+    """``css`` without comments and with string literals emptied (either may hold ``/*`` or braces).
+
+    Scanning strings and comments in one pass keeps ``content: "/*"`` from opening a comment and
+    a quote inside a comment from opening a string. An unterminated comment is left in place.
+    """
+    return CSS_TOKEN.sub(lambda match: '""' if match.group(0)[0] in "\"'" else " ", css)
+
+
+@pytest.mark.parametrize(
+    ("css", "code"),
+    [
+        ("a { b: c; } /* note */ d { }", "a { b: c; }   d { }"),
+        ('a::after { content: "/*"; } /* it\'s "quoted" */ b { }', 'a::after { content: ""; }   b { }'),
+        ("a { } /* one */ /* two\n lines */ b { }", "a { }     b { }"),
+        ("a { } /* unterminated", "a { } /* unterminated"),
+    ],
+)
+def test_css_code_strips_comments_and_strings(css: str, code: str) -> None:
+    assert css_code(css) == code
+
+
 def test_app_css_classification_colours() -> None:
-    css = (STATIC_ROOT / "css/app.css").read_text(encoding="utf-8")
+    code = css_code((STATIC_ROOT / "css/app.css").read_text(encoding="utf-8"))
     for cls in ("p", "lp", "vus", "lb", "b", "nc"):
-        assert f".badge-class-{cls} " in css
+        assert f".badge-class-{cls} " in code
     for severity in ("high", "medium", "low", "info"):
-        assert f".badge-severity-{severity} " in css
-    assert css.count("/*") == css.count("*/"), "balanced comments"
+        assert f".badge-severity-{severity} " in code
+    assert "/*" not in code and "*/" not in code, "every comment is closed and none is closed twice"
+    assert code.count("{") == code.count("}"), "balanced braces"
 
 
 INLINE_CODE = re.compile(r"<script(?![^>]*\bsrc=)[^>]*>|\sstyle=|\son[a-z]+=", re.IGNORECASE)
