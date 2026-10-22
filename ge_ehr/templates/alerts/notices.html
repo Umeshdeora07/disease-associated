@@ -3,7 +3,7 @@
 {% import "_macros.html" as ui %}
 {% block title %}Review notices{% endblock %}
 {% block content %}
-{% call ui.page_header("Review notices", "Raised when a new knowledge-base release or rule revision supersedes an alert. GE-EHR never reverses therapy automatically: check whether treatment was changed on the basis of the superseded alert, then acknowledge.", icon="clipboard2-pulse") %}
+{% call ui.page_header("Review notices", "Raised when a new knowledge-base release or a rule revision supersedes an actionable alert. Each notice says what changed; where advice was withdrawn or lowered, check whether treatment was changed on its basis (GE-EHR never reverses therapy automatically), then acknowledge.", icon="clipboard2-pulse") %}
   <a class="btn btn-outline-secondary" href="{{ url_for('alerts.inbox') }}"><i class="bi bi-bell" aria-hidden="true"></i> Alerts inbox</a>
 {% endcall %}
 
@@ -15,14 +15,14 @@
 </nav>
 
 <div class="notice-stack">
-  {% for notice in pagination.items %}
-  {% set form = forms.get(notice.id) %}{% set show_patient = true %}
+  {% for item in items %}
+  {% set form = forms.get(item.notice.id) %}{% set show_patient = true %}
   {% include "alerts/_notice_card.html" %}
   {% else %}
   <div class="card">
     <div class="card-body">
       {% if status == "open" %}
-      {{ ui.empty_state("clipboard2-check", "No open review notices", "Notices appear when a variant is downgraded out of the actionable band or a rule revision withdraws an alert. Nothing needs your attention right now.") }}
+      {{ ui.empty_state("clipboard2-check", "No open review notices", "Notices appear when a release reclassifies a variant or a rule revision withdraws an alert or changes its severity. Nothing needs your attention right now.") }}
       {% elif status == "acknowledged" %}
       {{ ui.empty_state("clipboard2", "No acknowledged notices yet", "Acknowledged notices are kept here with the comment and the clinician who acknowledged them.") }}
       {% else %}

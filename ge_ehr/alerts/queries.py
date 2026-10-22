@@ -8,16 +8,17 @@ Owned by the UI-A work package.
 
 from __future__ import annotations
 
-from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections import Counter, defaultdict
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy import Select, case, func, select
 from sqlalchemy.orm import joinedload, selectinload
 
 from .. import constants as C
 from ..extensions import db
-from ..models import Alert, AlertEvent, PatientVariant, ReevaluationRun, ReviewNotice, Rule
+from ..models import Alert, AlertEvent, KbRelease, PatientVariant, ReevaluationRun, ReviewNotice, Rule
 from ..services.rules import RuleSpec, describe_clinical_condition, describe_genetic_criterion, rule_code_sort_key
 
 #: ``status`` filter of the inbox → alert statuses it selects (``current`` is the default).
@@ -45,6 +46,10 @@ NOTICE_FILTERS: dict[str, tuple[str, ...]] = {
     "all": C.NOTICE_STATUSES,
 }
 NOTICE_FILTER_LABELS: dict[str, str] = {"open": "Open", "acknowledged": "Acknowledged", "all": "All"}
+#: Closing advice of a review-notice message (SPEC §7.1). The notice cards word their advice by
+#: cause instead: it applies only when advice was withdrawn or lowered.
+REVIEW_ADVICE = "Review any treatment change made on the basis of this alert; GE-EHR never reverses therapy automatically."
+NEW_ALERT_ADVICE = "No advice was withdrawn or lowered: review the new alert linked below."
 
 
 @dataclass(frozen=True)
@@ -210,6 +215,113 @@ def rule_criteria(alert: Alert) -> RuleCriteria:
     """The genetic and clinical criteria of the alert's confirmed rule version."""
     spec = RuleSpec.from_definition(alert.confirmed_rule_version.definition)
     return RuleCriteria(genetic=describe_genetic_criterion(spec), clinical=describe_clinical_condition(spec.clinical))
+
+
+@dataclass(frozen=True)
+class NoticeOutcome:
+    """A superseded alert of a review notice and the finding of the same rule that replaced it."""
+
+    alert: Alert
+    replacement: Alert | None
+
+    @property
+    def change(self) -> str:
+        """``withdrawn`` (the rule no longer raises an alert), ``lowered`` or ``raised`` (severity),
+        or ``replaced`` (same severity)."""
+        if self.replacement is None or self.replacement.kind != "alert":
+            return "withdrawn"
+        old = C.SEVERITY_ORDER.get(self.alert.severity or "", -1)
+        new = C.SEVERITY_ORDER.get(self.replacement.severity or "", -1)
+        return "lowered" if new < old else "raised" if new > old else "replaced"
+
+
+@dataclass(frozen=True)
+class NoticeView:
+    """A review notice with its cause: what replaced each superseded alert and, for a rule
+    revision, the rule versions that changed (SPEC §7.3)."""
+
+    notice: ReviewNotice
+    outcomes: list[NoticeOutcome]
+    rule_changes: list[dict[str, Any]]
+
+    @property
+    def is_rule_revision(self) -> bool:
+        return self.notice.run is not None and self.notice.run.trigger == "rule_revision"
+
+    @property
+    def release(self) -> KbRelease | None:
+        """The release whose activation raised the notice (None for a rule revision)."""
+        run = self.notice.run
+        return run.new_release if run is not None and run.trigger == "clinvar_release" else None
+
+    @property
+    def shows_class_change(self) -> bool:
+        """Release notices show the class change; others only when the class differs."""
+        if self.is_rule_revision:
+            return False
+        return self.release is not None or self.notice.old_classification != self.notice.new_classification
+
+    @property
+    def withdraws_advice(self) -> bool:
+        """True when an alert stopped firing or its severity decreased (the treatment-review advice applies)."""
+        return not self.outcomes or any(outcome.change in ("withdrawn", "lowered") for outcome in self.outcomes)
+
+    @property
+    def advice(self) -> str:
+        """What to check: the treatment-review advice when advice was withdrawn or lowered,
+        otherwise the new alert (an escalation or a revised recommendation)."""
+        return REVIEW_ADVICE if self.withdraws_advice else NEW_ALERT_ADVICE
+
+    @property
+    def replacements(self) -> list[Alert]:
+        return [outcome.replacement for outcome in self.outcomes if outcome.replacement is not None]
+
+    @property
+    def summary(self) -> str:
+        """The notice message without its closing advice (the card words the advice by cause)."""
+        return self.notice.message.removesuffix(REVIEW_ADVICE).rstrip()
+
+
+def notice_views(notices: Iterable[ReviewNotice]) -> list[NoticeView]:
+    """``notices`` with their outcomes and rule changes (one query for the replacements of all).
+
+    The replacements of a notice's alerts are the findings its run created for the same patient
+    and variant; each superseded alert is matched with the one of the same rule.
+    """
+    notices = list(notices)
+    run_ids = {notice.run_id for notice in notices if notice.run_id is not None}
+    created: defaultdict[tuple[int | None, int, int], list[Alert]] = defaultdict(list)
+    if run_ids:
+        statement = select(Alert).where(
+            Alert.created_run_id.in_(sorted(run_ids)),
+            Alert.patient_id.in_(sorted({notice.patient_id for notice in notices})),
+        )
+        for alert in db.session.scalars(statement):
+            created[(alert.created_run_id, alert.patient_id, alert.variant_key_id)].append(alert)
+    views = []
+    for notice in notices:
+        candidates = created.get((notice.run_id, notice.patient_id, notice.variant_key_id), []) if notice.run_id else []
+        outcomes = [
+            NoticeOutcome(
+                alert=alert,
+                replacement=min(
+                    (found for found in candidates if found.rule_code == alert.rule_code),
+                    key=lambda found: (found.kind != "alert", found.id),
+                    default=None,
+                ),
+            )
+            for alert in notice.alerts
+        ]
+        codes = {alert.rule_code for alert in notice.alerts}
+        changes = (notice.run.rule_change or []) if notice.run is not None else []
+        views.append(
+            NoticeView(
+                notice=notice,
+                outcomes=outcomes,
+                rule_changes=[change for change in changes if change.get("code") in codes] or list(changes),
+            )
+        )
+    return views
 
 
 def notices_statement(status: str) -> Select[tuple[ReviewNotice]]:

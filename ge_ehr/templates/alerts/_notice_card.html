@@ -1,5 +1,9 @@
-{#- One review notice. Expects ``notice``, ``form`` (acknowledge form or None) and ``show_patient``. -#}
+{#- One review notice. Expects ``item`` (alerts.queries.NoticeView), ``form`` (acknowledge form or None)
+    and ``show_patient``. Worded by cause: a rule revision shows the rule versions and severity
+    changes (no class change, no release); a release shows the class change and the release. The
+    treatment-review advice appears only when an alert stopped firing or its severity decreased. -#}
 {% import "_macros.html" as ui %}
+{% set notice = item.notice %}
 {% set is_open = notice.status == "open" %}
 <article class="notice-card{% if is_open %} notice-card-open{% endif %}" aria-labelledby="notice-{{ notice.id }}-title">
   <header class="notice-head">
@@ -11,17 +15,45 @@
       <div class="notice-variant">
         <span class="gene-symbol">{{ notice.variant_key.gene or "—" }}</span>
         <code class="variant-key">{{ notice.variant_key.label }}</code>
+        {%- if item.is_rule_revision %}
+        <span class="notice-cause"><i class="bi bi-journal-medical" aria-hidden="true"></i>Rule revision</span>
+        {%- for change in item.rule_changes %}
+        <span class="version-chip version-chip-change">{{ change.code }}
+          {%- if change.old_version is not none %} v{{ change.old_version }} <i class="bi bi-arrow-right" aria-hidden="true"></i><span class="visually-hidden"> to</span> v{{ change.new_version }}
+          {%- else %} v{{ change.new_version }}{% endif -%}
+        </span>
+        {%- endfor %}
+        {%- elif item.shows_class_change %}
         <span class="class-change" aria-label="Classification changed from {{ notice.old_classification|class_label }} to {{ notice.new_classification|class_label }}">
           {{ ui.class_badge(notice.old_classification) }}<i class="bi bi-arrow-right" aria-hidden="true"></i>{{ ui.class_badge(notice.new_classification) }}
         </span>
+        {%- endif %}
       </div>
+      {%- if item.outcomes %}
+      <ul class="notice-outcomes" aria-label="What happened to the superseded alerts">
+        {%- for outcome in item.outcomes %}
+        <li class="notice-outcome notice-outcome-{{ outcome.change }}">
+          <span class="notice-outcome-rule">{{ outcome.alert.rule_code }}</span>
+          {{ ui.severity_badge(outcome.alert.severity) }}<i class="bi bi-arrow-right" aria-hidden="true"></i><span class="visually-hidden"> to</span>
+          {%- if outcome.change == "withdrawn" %}
+          <span class="notice-outcome-text">{{ "now an information note" if outcome.replacement else "no longer applies" }}</span>
+          {%- else %}
+          {{ ui.severity_badge(outcome.replacement.severity) }}
+          <span class="notice-outcome-text">{{ {"lowered": "severity lowered", "raised": "severity raised", "replaced": "recommendation revised"}[outcome.change] }}</span>
+          {%- endif %}
+        </li>
+        {%- endfor %}
+      </ul>
+      {%- endif %}
     </div>
     <div class="notice-head-side">
       {{ ui.status_badge(notice.status) }}
       <div class="notice-when">Raised {{ notice.created_at|dt }}</div>
     </div>
   </header>
-  <p class="notice-message">{{ notice.message }}</p>
+  <p class="notice-message">{{ item.summary }}</p>
+  <p class="notice-advice{% if item.withdraws_advice %} notice-advice-withdrawn{% endif %}">
+    <i class="bi bi-{{ 'exclamation-diamond' if item.withdraws_advice else 'arrow-right-circle' }}" aria-hidden="true"></i><span>{{ item.advice }}</span></p>
   <div class="notice-links">
     {% if notice.alerts %}
     <span class="notice-links-label">Superseded:</span>
@@ -29,8 +61,15 @@
     <a class="rule-link" href="{{ url_for('alerts.view_alert', alert_id=alert.id) }}">{{ alert.rule_code }} {{ alert.kind }}<span class="visually-hidden">: {{ alert.title }}</span></a>
     {% endfor %}
     {% endif %}
+    {% if item.replacements %}
+    <span class="notice-links-label">Now:</span>
+    {% for alert in item.replacements %}
+    <a class="rule-link" href="{{ url_for('alerts.view_alert', alert_id=alert.id) }}">{{ alert.rule_code }} {{ alert.kind }}<span class="visually-hidden">: {{ alert.title }}</span></a>
+    {% endfor %}
+    {% endif %}
     {% if notice.run %}
-    <a class="notice-run" href="{{ url_for('knowledge.view_run', run_id=notice.run.id) }}"><i class="bi bi-arrow-repeat" aria-hidden="true"></i>Run #{{ notice.run.id }}{% if notice.run.new_release %} · {{ notice.run.new_release.label }}{% endif %}</a>
+    <a class="notice-run" href="{{ url_for('knowledge.view_run', run_id=notice.run.id) }}"><i class="bi bi-arrow-repeat" aria-hidden="true"></i>Run #{{ notice.run.id }}
+      {%- if item.release %} · {{ item.release.label }}{% else %} · {{ notice.run.trigger|trigger_label }}{% endif %}</a>
     {% endif %}
   </div>
   {% if is_open and form %}

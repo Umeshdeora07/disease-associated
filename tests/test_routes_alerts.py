@@ -19,7 +19,7 @@ from sqlalchemy import event, select
 from ge_ehr.alerts import queries, review
 from ge_ehr.alerts.review import COMMENT_MAX_LENGTH
 from ge_ehr.models import Alert, AlertEvent, AuditLog, ReviewNotice, User
-from ge_ehr.services import patient_records
+from ge_ehr.services import patient_records, reevaluation
 from tests.factories import make_alert, make_review_notice, make_run
 from tests.ui_data import Clinic, build_clinic, csrf_clinic, csrf_token
 
@@ -313,6 +313,82 @@ def test_notices_paginate_and_keep_the_status_filter(
     assert "Showing 1–1 of 2" in first and 'href="/notices?page=2&amp;status=all"' in first
     second = text(clinician_client.get("/notices?status=all&page=2"))
     assert "Showing 2–2 of 2" in second
+
+
+def notice_cards(body: str) -> dict[int, str]:
+    """The review-notice cards of a page by notice id."""
+    return {
+        int(match.group(1)): match.group(0)
+        for match in re.finditer(r'<article class="notice-card[^"]*" aria-labelledby="notice-(\d+)-title">.*?</article>', body, re.S)
+    }
+
+
+def revise(db: SQLAlchemy, clinic: Clinic, code: str, **changes: object) -> None:
+    """Apply version 2 of the clinic's rule ``code`` with ``changes`` (a rule-revision run)."""
+    definition = dict(clinic.rules[code].definition, version=2, change_note="Test revision", **changes)
+    reevaluation.apply_rule_set({"rule_set": "Test rules", "label": f"{code} v2 (test)", "rules": [definition]})
+    db.session.commit()
+
+
+def test_release_notice_card_shows_the_class_change_release_and_withdrawal_advice(
+    clinician_client: FlaskClient, notice: ReviewNotice
+) -> None:
+    card = notice_cards(text(clinician_client.get("/notices")))[notice.id]
+    assert 'aria-label="Classification changed from Likely pathogenic to Uncertain significance"' in card
+    assert "UI R1 (2025-01, synthetic)" in card and "Rule revision" not in card
+    assert queries.REVIEW_ADVICE in card and queries.NEW_ALERT_ADVICE not in card
+    assert "no longer applies" in card
+
+
+@pytest.mark.parametrize(
+    ("code", "changes", "patient_name", "outcome", "withdrawal"),
+    [
+        ("D2", {"severity": "medium"}, "carrier", ("High", "Medium", "severity lowered"), True),
+        ("D2", {"genetic": {"genes": ["HNF4A"], "classes": ["P", "LP"], "mechanism": None}}, "carrier",
+         ("High", None, "no longer applies"), True),
+        ("D1", {"severity": "high"}, "gck_patient", ("Medium", "High", "severity raised"), False),
+    ],
+    ids=["lowered", "withdrawn", "raised"],
+)
+def test_rule_revision_notice_card_is_worded_by_cause(
+    clinician_client: FlaskClient, db: SQLAlchemy, clinic: Clinic,
+    code: str, changes: dict, patient_name: str, outcome: tuple, withdrawal: bool,
+) -> None:
+    patient = getattr(clinic, patient_name)
+    revise(db, clinic, code, **changes)
+    notice = db.session.scalar(select(ReviewNotice).where(ReviewNotice.patient_id == patient.id))
+    assert notice is not None and notice.run.trigger == "rule_revision"
+
+    for path in ("/notices", f"/patients/{patient.id}/recommendations"):
+        card = notice_cards(text(clinician_client.get(path)))[notice.id]
+        assert "Rule revision" in card and f"{code} v1 <i" in card and "v2" in card
+        # No classification change and no release: the knowledge base did not change.
+        assert "class-change" not in card and "UI R1 (2025-01, synthetic)" not in card
+        assert f"Run #{notice.run_id} · Rule revision" in card
+        old, new, wording = outcome
+        assert f"badge-severity-{old.lower()}" in card and wording in card
+        if new is not None:
+            replacement = the_alert(db, patient, code)
+            assert f"badge-severity-{new.lower()}" in card
+            assert f'href="/alerts/{replacement.id}"' in card and "Now:" in card
+        assert (queries.REVIEW_ADVICE in card) is withdrawal
+        assert (queries.NEW_ALERT_ADVICE in card) is not withdrawal
+        # The message keeps its account of what happened, without contradicting advice.
+        assert notice.message.removesuffix(queries.REVIEW_ADVICE).rstrip() in card
+
+
+def test_notice_views_load_replacements_with_one_query(
+    clinician_client: FlaskClient, db: SQLAlchemy, clinic: Clinic
+) -> None:
+    revise(db, clinic, "D5", severity="medium")  # both FAM-1 carriers: two notices
+    notices = list(db.session.scalars(queries.notices_statement("open")))
+    assert len(notices) == 2
+    with count_queries(db) as statements:
+        views = queries.notice_views(notices)
+    assert len(statements) == 1
+    assert [outcome.change for view in views for outcome in view.outcomes] == ["raised", "raised"]
+    assert all(view.rule_changes == [{"code": "D5", "old_version": 1, "new_version": 2}] for view in views)
+    assert queries.notice_views([]) == []
 
 
 def test_acknowledge_notice(clinician_client: FlaskClient, db: SQLAlchemy, clinician_user: User, notice: ReviewNotice) -> None:

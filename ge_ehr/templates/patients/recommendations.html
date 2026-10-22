@@ -5,18 +5,20 @@
 {% import "patients/_patient_macros.html" as pm %}
 {% block title %}Recommendations · {{ patient.display_name }}{% endblock %}
 
+{#- Title, text, source and severity come from the finding: at a point in time they are the ones
+    recorded then (§7.5), never the alert's current text. -#}
 {% macro finding_card(finding, live) -%}
 {%- set alert = finding.alert -%}
-<article class="finding-card finding-{{ alert.kind }} finding-sev-{{ alert.severity or 'note' }}" aria-labelledby="finding-{{ alert.id }}-title">
+<article class="finding-card finding-{{ alert.kind }} finding-sev-{{ finding.severity or 'note' }}" aria-labelledby="finding-{{ alert.id }}-title">
   <div class="finding-head">
     <div class="finding-heading">
-      {%- if alert.kind == "alert" %}{{ ui.severity_badge(alert.severity) }}{% else %}{{ ui.kind_badge("note") }}{% endif %}
+      {%- if alert.kind == "alert" %}{{ ui.severity_badge(finding.severity) }}{% else %}{{ ui.kind_badge("note") }}{% endif %}
       <span class="rule-chip" title="Rule {{ finding.rule_label }}">{{ finding.rule_label }}</span>
-      <h3 class="finding-title" id="finding-{{ alert.id }}-title">{{ alert.title }}</h3>
+      <h3 class="finding-title" id="finding-{{ alert.id }}-title">{{ finding.title }}</h3>
     </div>
     {{ pm.finding_badges(alert, status=finding.status) }}
   </div>
-  <p class="finding-message">{{ alert.message }}</p>
+  <p class="finding-message">{{ finding.message }}</p>
   {%- if alert.kind == "alert" %}
   <p class="advisory-tag"><i class="bi bi-info-circle" aria-hidden="true"></i>{{ C.ADVISORY_DISCLAIMER }}</p>
   {%- endif %}
@@ -25,7 +27,7 @@
     <div><dt>Classification</dt><dd>{{ ui.class_badge(finding.classification) }} {{ finding.classification|class_label }}</dd></div>
     <div><dt>Release</dt><dd>{{ finding.release.label if finding.release else "No release" }}</dd></div>
     <div><dt>Raised</dt><dd>{{ alert.created_at|dt }} · {{ alert.trigger|trigger_label }}</dd></div>
-    <div class="finding-meta-wide"><dt>Source</dt><dd>{{ alert.source or "—" }}</dd></div>
+    <div class="finding-meta-wide"><dt>Source</dt><dd>{{ finding.source or "—" }}</dd></div>
   </dl>
   {%- if finding.status == "reviewed" and alert.reviewed_at %}
   <div class="finding-review">
@@ -43,7 +45,7 @@
       <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('alerts.view_alert', alert_id=alert.id, next=return_url) }}">Details</a>
       {%- if live and alert.status == "active" %}
       {{ ui.confirm_button(url_for('alerts.review_alert', alert_id=alert.id), "Mark reviewed",
-                           "Mark " ~ finding.rule_label ~ " (" ~ alert.title ~ ") as reviewed? It stays current; open Details to add a comment.",
+                           "Mark " ~ finding.rule_label ~ " (" ~ finding.title ~ ") as reviewed? It stays current; open Details to add a comment.",
                            variant="outline-primary", icon="check2", confirm_label="Mark reviewed", title="Review " ~ alert.kind,
                            hidden={"next": return_url}) }}
       {%- endif %}
@@ -102,7 +104,7 @@
   <i class="bi bi-clock-history" aria-hidden="true"></i>
   <div>
     <strong>Viewing the state as of {{ view.at_display }}.</strong>
-    Each finding shows the release, rule version and classification it rested on at that moment. Review notices and history are shown for the current state only.
+    Each finding shows the recommendation text, release, rule version and classification it had at that moment. Review notices and history are shown for the current state only.
   </div>
   <a class="btn btn-sm btn-light" href="{{ url_for('patients.recommendations', patient_id=patient.id) }}">Back to current state</a>
 </div>
@@ -114,10 +116,10 @@
 {% if live and view.open_notices %}
 <section class="block-gap" id="review-notices" aria-labelledby="notices-title">
   <h2 class="rec-group-title rec-group-title-notice" id="notices-title"><i class="bi bi-clipboard2-pulse" aria-hidden="true"></i> Open review notices <span class="count-badge">{{ view.open_notices|length }}</span></h2>
-  <p class="rec-group-help">A variant was reclassified out of the actionable band and the alerts below were superseded. GE-EHR never reverses therapy automatically — review any treatment change made on the basis of these alerts.</p>
+  <p class="rec-group-help">A knowledge-base release or a rule revision superseded alerts of this patient. Each notice says what changed and what to review; GE-EHR never reverses therapy automatically.</p>
   <div class="notice-stack">
     {% for notice in view.open_notices %}
-    {% set form = notice_forms.get(notice.id) %}{% set show_patient = false %}
+    {% set item = notice_views[notice.id] %}{% set form = notice_forms.get(notice.id) %}{% set show_patient = false %}
     {% include "alerts/_notice_card.html" %}
     {% endfor %}
   </div>
@@ -225,7 +227,7 @@
     <summary><h2 class="rec-group-title d-inline-flex" id="acked-title"><i class="bi bi-check2-square" aria-hidden="true"></i> Acknowledged review notices <span class="count-badge">{{ view.acknowledged_notices|length }}</span></h2></summary>
     <div class="notice-stack">
       {% for notice in view.acknowledged_notices %}
-      {% set form = none %}{% set show_patient = false %}
+      {% set item = notice_views[notice.id] %}{% set form = none %}{% set show_patient = false %}
       {% include "alerts/_notice_card.html" %}
       {% endfor %}
     </div>

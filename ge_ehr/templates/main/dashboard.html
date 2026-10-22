@@ -31,7 +31,7 @@
       </div>
     </div>
   </div>
-  <div class="col-6 col-md-4 col-xl">{{ ui.stat_card("Open review notices", data.open_notices|number, "clipboard2-pulse", href=url_for('alerts.notices'), tone="warning" if data.open_notices else "success", hint="downgrades awaiting review" if data.open_notices else "nothing to review") }}</div>
+  <div class="col-6 col-md-4 col-xl">{{ ui.stat_card("Open review notices", data.open_notices|number, "clipboard2-pulse", href=url_for('alerts.notices'), tone="warning" if data.open_notices else "success", hint="superseded alerts awaiting review" if data.open_notices else "nothing to review") }}</div>
   <div class="col-12 col-md-8 col-xl">{{ ui.stat_card("Reclassification alerts", data.reclassified_in_last_run|number, "arrow-repeat", href=url_for('alerts.inbox', reclassified=1), tone="purple",
         hint=("raised by run #" ~ run.id ~ ", the latest release activation") if run else "no release activated yet") }}</div>
 </div>
@@ -61,10 +61,11 @@
         </li>
         {% endfor %}
         {% for notice in data.attention_notices %}
+        {% set rule_revision = notice.run is not none and notice.run.trigger == "rule_revision" %}
         <li class="attention-item attention-notice">
           <span class="attention-icon" aria-hidden="true"><i class="bi bi-clipboard2-pulse-fill"></i></span>
           <div class="attention-body">
-            <a class="attention-title" href="{{ url_for('alerts.notices') }}">Review notice · {{ ui.gene(notice.variant_key.gene) }} variant {{ "reclassified" if notice.old_classification != notice.new_classification else "re-evaluated" }}</a>
+            <a class="attention-title" href="{{ url_for('alerts.notices') }}">Review notice · {{ ui.gene(notice.variant_key.gene) }} variant {{ "alert changed by a rule revision" if rule_revision else "reclassified" if notice.old_classification != notice.new_classification else "re-evaluated" }}</a>
             <div class="attention-meta">
               <a href="{{ url_for('patients.recommendations', patient_id=notice.patient_id) }}">{{ notice.patient.display_name }}</a>
               <span class="font-monospace">{{ notice.patient.mrn }}</span>
@@ -73,7 +74,7 @@
             </div>
           </div>
           <div class="attention-badges">
-            {% if notice.old_classification != notice.new_classification %}{{ kb.class_change(notice.old_classification, notice.new_classification) }}{% endif %}
+            {% if not rule_revision and notice.old_classification != notice.new_classification %}{{ kb.class_change(notice.old_classification, notice.new_classification) }}{% endif %}
             {{ ui.status_badge("open") }}
           </div>
         </li>

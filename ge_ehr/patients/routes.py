@@ -24,6 +24,7 @@ from flask_login import current_user
 from werkzeug.wrappers import Response
 
 from .. import constants as C
+from ..alerts import queries as alert_queries
 from ..alerts.forms import acknowledge_form
 from ..constants import CLINICAL_ROLES
 from ..extensions import db
@@ -376,6 +377,10 @@ def recommendations(patient_id: int) -> tuple[str, int]:
             return_url=return_url,
             notice_forms={
                 notice.id: acknowledge_form(notice.id, formdata=None, next=return_url) for notice in view.open_notices
+            },
+            notice_views={
+                item.notice.id: item
+                for item in alert_queries.notice_views(view.open_notices + view.acknowledged_notices)
             },
         ),
         400 if at_error else 200,

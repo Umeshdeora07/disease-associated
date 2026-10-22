@@ -163,7 +163,7 @@ def clinical_dashboard() -> ClinicalDashboard:
     attention_total = db.session.scalar(select(func.count(Alert.id)).where(_ATTENTION_ALERT)) or 0
     attention_notices = db.session.scalars(
         select(ReviewNotice)
-        .options(joinedload(ReviewNotice.patient), joinedload(ReviewNotice.variant_key))
+        .options(joinedload(ReviewNotice.patient), joinedload(ReviewNotice.variant_key), joinedload(ReviewNotice.run))
         .where(ReviewNotice.status == "open")
         .order_by(ReviewNotice.created_at.desc(), ReviewNotice.id.desc())
         .limit(ATTENTION_ITEMS)

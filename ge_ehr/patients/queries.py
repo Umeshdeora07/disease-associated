@@ -3,7 +3,7 @@
 Every function loads what its page needs with a fixed number of queries — eager loading and
 grouped aggregates instead of per-row lookups — so list pages stay fast for large cohorts.
 Classifications come from :mod:`ge_ehr.services.classification`, the point-in-time view from
-:func:`ge_ehr.services.reevaluation.alerts_as_of`.
+:func:`ge_ehr.services.reevaluation.alerts_as_of` and :func:`~ge_ehr.services.reevaluation.alert_snapshot_as_of`.
 
 Owned by the UI-A work package.
 """
@@ -475,7 +475,11 @@ def alert_summary(patient: Patient) -> AlertSummary:
 
 @dataclass(frozen=True)
 class FindingView:
-    """An alert or note as it stood at the time viewed (now, or the point in time)."""
+    """An alert or note as it stood at the time viewed (now, or the point in time).
+
+    ``title``, ``message``, ``source`` and ``severity`` are the text shown: the alert's stored
+    text for the current state, the text recorded at that moment for a point in time (§7.5).
+    """
 
     alert: Alert
     status: str
@@ -483,6 +487,10 @@ class FindingView:
     rule_version: RuleVersion | None
     classification: str
     events: list[AlertEvent]
+    title: str
+    message: str
+    source: str | None
+    severity: str | None
 
     @property
     def rule_label(self) -> str:
@@ -551,16 +559,25 @@ class RecommendationsView:
         return {severity: len(findings) for severity, findings in self.groups}
 
 
-def _finding_view(alert: Alert, at: datetime) -> FindingView:
-    """A finding current at ``at``: its review status and evidence (release, rule version, class) then."""
-    evidence = reevaluation.provenance_as_of(alert, at)
+def _finding_view(alert: Alert, at: datetime, *, as_of: bool = False) -> FindingView:
+    """A finding current at ``at``: its review status and evidence (release, rule version, class) then.
+
+    ``as_of`` (the point-in-time view): the title, text, source and severity are those snapshotted
+    on the evidence event in force at ``at``, not the alert's current text.
+    """
+    snapshot = reevaluation.alert_snapshot_as_of(alert, at)
+    shown = snapshot if as_of and snapshot is not None else alert
     return FindingView(
         alert=alert,
         status="reviewed" if alert.reviewed_at is not None and alert.reviewed_at <= at else "active",
-        release=evidence.release if evidence is not None else alert.confirmed_release,
-        rule_version=evidence.rule_version if evidence is not None else alert.confirmed_rule_version,
-        classification=(evidence.classification if evidence is not None else None) or alert.classification,
+        release=snapshot.release if snapshot is not None else alert.confirmed_release,
+        rule_version=snapshot.rule_version if snapshot is not None else alert.confirmed_rule_version,
+        classification=snapshot.classification if snapshot is not None else alert.classification,
         events=[event for event in alert.events if event.at <= at],
+        title=shown.title,
+        message=shown.message,
+        source=shown.source,
+        severity=shown.severity,
     )
 
 
@@ -572,7 +589,7 @@ def _group(findings: Iterable[FindingView]) -> tuple[list[tuple[str, list[Findin
         if finding.alert.kind == "note":
             notes.append(finding)
         else:
-            by_severity[finding.alert.severity or "info"].append(finding)
+            by_severity[finding.severity or "info"].append(finding)
     groups = [(severity, by_severity[severity]) for severity in SEVERITY_GROUPS if by_severity[severity]]
     return groups, notes
 
@@ -674,6 +691,6 @@ def recommendations_as_of(patient: Patient, at: datetime) -> RecommendationsView
     """The findings that were current at ``at`` with the evidence they rested on then (§7.5)."""
     # Loading every alert with its provenance first lets alerts_as_of reuse those objects.
     alerts = _patient_alerts(patient)
-    current = [_finding_view(alert, at) for alert in _sort_alerts(reevaluation.alerts_as_of(patient, at))]
+    current = [_finding_view(alert, at, as_of=True) for alert in _sort_alerts(reevaluation.alerts_as_of(patient, at))]
     groups, notes = _group(current)
     return RecommendationsView(at=at, groups=groups, notes=notes, change_points=_change_points(alerts))

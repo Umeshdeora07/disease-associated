@@ -35,7 +35,7 @@
   <div class="alert-body">
     <strong>Superseded on {{ alert.superseded_at|dt }}</strong> — {{ alert.superseded_reason|superseded_reason_label|lower }}.
     {%- if alert.superseded_run %} See <a href="{{ url_for('knowledge.view_run', run_id=alert.superseded_run.id) }}">run #{{ alert.superseded_run.id }}</a>.{% endif %}
-    This record is kept unchanged for the audit trail{% if alert.review_notice %}; a <a href="{{ url_for('alerts.notices', status='all') }}">review notice</a> asked a clinician to check any treatment change made on its basis{% endif %}.
+    This record is kept unchanged for the audit trail{% if alert.review_notice %}; a <a href="{{ url_for('alerts.notices', status='all') }}">review notice</a> says what changed and what to review{% endif %}.
   </div>
 </div>
 {% endif %}

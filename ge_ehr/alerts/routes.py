@@ -119,6 +119,7 @@ def notices() -> str:
     return render_template(
         "alerts/notices.html",
         pagination=pagination,
+        items=queries.notice_views(pagination.items),
         status=status,
         counts=queries.notice_counts(),
         filter_labels=queries.NOTICE_FILTER_LABELS,

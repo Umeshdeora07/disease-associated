@@ -14,12 +14,14 @@ import pytest
 from flask import Flask
 from flask.testing import FlaskClient
 from flask_sqlalchemy import SQLAlchemy
+from markupsafe import escape
 from sqlalchemy import event, func, select
 
 from ge_ehr.models import Alert, AuditLog, GenomicUpload, Medication, Patient, PatientVariant, ReviewNotice, utcnow
 from ge_ehr.patients import queries
 from ge_ehr.patients.forms import drug_suggestions
 from ge_ehr.patients.routes import describe_outcome
+from ge_ehr.services import reevaluation
 from ge_ehr.services.alerting import ReconcileResult
 from tests.factories import make_patient, make_review_notice
 from tests.ui_data import GCK_LP, HNF1A_P, Clinic, build_clinic, csrf_clinic, csrf_token, vcf_bytes
@@ -644,6 +646,32 @@ def test_recommendations_point_in_time_shows_superseded_alerts_as_they_were(
     assert len(change_points) == 2
     past = text(clinician_client.get(f"/patients/{patient.id}/recommendations?at={moment.isoformat()}"))
     assert "HNF1A diabetes on insulin or metformin" in past and "Active" in past
+
+
+def test_recommendations_point_in_time_shows_the_text_of_the_time(
+    clinician_client: FlaskClient, db: SQLAlchemy, clinic: Clinic
+) -> None:
+    """A note revised in place later is shown with its title, text and rule version of then (§7.5)."""
+    patient = clinic.carrier
+    clinician_client.post(f"/patients/{patient.id}/medications", data={"med-drug_name": "Gliclazide"})
+    note = db.session.scalar(select(Alert).where(Alert.patient_id == patient.id, Alert.kind == "note"))
+    old_title, old_message, old_source = note.title, note.message, note.source
+    moment = utcnow()
+    revised = dict(clinic.rules["D2"].definition, version=2, change_note="Wording revised",
+                   title="HNF1A diabetes: revised wording", recommendation="Revised recommendation text.",
+                   source="Revised source 2026")
+    reevaluation.apply_rule_set({"rule_set": "Test rules", "label": "D2 v2 (test)", "rules": [revised]})
+    db.session.commit()
+    assert note.is_current and note.title == "HNF1A diabetes: revised wording"
+
+    now = text(clinician_client.get(f"/patients/{patient.id}/recommendations"))
+    assert "HNF1A diabetes: revised wording" in now and "D2 v2" in now and "Revised source 2026" in now
+    past = text(clinician_client.get(f"/patients/{patient.id}/recommendations?at={moment.isoformat()}"))
+    finding = past[past.index(f'id="finding-{note.id}-title"') - 600 :]
+    finding = finding[: finding.index("</article>")]
+    assert old_title in finding and escape(old_message) in finding and escape(old_source) in finding
+    assert "D2 v1" in finding and "D2 v2" not in finding
+    assert "revised wording" not in past and "Revised recommendation text." not in past and "Revised source" not in past
 
 
 def test_recommendations_invalid_point_in_time(clinician_client: FlaskClient, clinic: Clinic) -> None:
