@@ -1,8 +1,10 @@
 """F2 — ClinVar VCF import, writer, release diff and 7-gene download subsets (SPEC §5.3).
 
-* :func:`iter_clinvar_records` reads a ClinVar(-format) VCF with cyvcf2 and yields the panel
-  records; :func:`import_release` stores one file as a new, non-current :class:`KbRelease` with
-  bulk inserts (optionally applying an expert-panel overlay CSV).
+* :func:`iter_clinvar_records` reads a ClinVar(-format) VCF with cyvcf2 — or, where cyvcf2 is
+  not installed (Windows), with the equivalent pure-Python reader of
+  :mod:`~ge_ehr.services.vcf_backend` — and yields the panel records; :func:`import_release`
+  stores one file as a new, non-current :class:`KbRelease` with bulk inserts (optionally
+  applying an expert-panel overlay CSV).
 * :func:`write_clinvar_vcf` writes deterministic ClinVar-format VCFs (used for the synthetic demo
   and evaluation releases; bgzip-compressed when the name ends in ``.gz``).
 * :func:`diff_releases` lists the stored keys whose class or mechanism differs between releases.
@@ -36,7 +38,6 @@ from itertools import batched, chain
 from pathlib import Path
 from typing import IO, TYPE_CHECKING, Any, BinaryIO
 
-import cyvcf2
 from sqlalchemy import insert, select
 
 from .. import constants as C
@@ -52,7 +53,7 @@ from .classification import (
     review_stars,
 )
 
-# vcf_parser also lowers htslib's log level to errors only when it is imported.
+from .vcf_backend import SitesVcfReader, VcfReadError, cyvcf2, vcf_backend
 from .vcf_parser import BGZF_EOF, GRCH37_NAME, GZIP_MAGIC, is_truncated_bgzf
 
 if TYPE_CHECKING:
@@ -212,7 +213,7 @@ def readable_condition(clndn: str | None) -> str | None:
 
 
 def _info_text(value: Any) -> str | None:
-    """A cyvcf2 INFO value as text (None for missing values and flags; escapes decoded)."""
+    """An INFO value (as cyvcf2 returns it) as text (None for missing values and flags; escapes decoded)."""
     if value is None or isinstance(value, bool):
         return None
     if isinstance(value, tuple):
@@ -266,30 +267,60 @@ def iter_clinvar_records(path: str | os.PathLike[str]) -> Iterator[ClinVarRecord
     (see :func:`panel_gene`). Alleles that are not plain bases (``.``, ``*``, ``<DEL>``,
     breakends) and records with a non-ACGTN REF are skipped. Raises ValueError when the file
     cannot be read as a VCF or is truncated.
+
+    Every line is first checked by the pure-Python :class:`~ge_ehr.services.vcf_backend.SitesVcfReader`
+    (htslib crashes the whole process on some malformed lines, e.g. a blank line or a
+    non-numeric POS). With the cyvcf2 backend htslib then reads the same line, in lockstep;
+    with the pure-Python backend the validated line itself is the record (same values, see
+    :func:`~ge_ehr.services.vcf_backend.typed_info_value`).
     """
     file_path = Path(path)
     _check_not_truncated(file_path)
+    backend = vcf_backend()
+    try:
+        text_reader = SitesVcfReader(file_path)
+    except VcfReadError as exc:
+        raise ValueError(_read_error_message(file_path.name, exc)) from None
+    with text_reader:
+        records = _cyvcf2_records(file_path, text_reader) if backend == "cyvcf2" else text_reader.records()
+        try:
+            for record in records:
+                yield from _split_record(record)
+        except VcfReadError as exc:
+            raise ValueError(_read_error_message(file_path.name, exc)) from None
+
+
+def _read_error_message(name: str, error: VcfReadError) -> str:
+    if error.stage == "header":
+        return f"{name} could not be read as a VCF file ({error.reason})."
+    return f"{name} could not be read completely: the file is truncated or not a valid VCF ({error.reason})."
+
+
+def _cyvcf2_records(file_path: Path, text_reader: SitesVcfReader) -> Iterator[Any]:
+    """cyvcf2 records, each read only after the pure-Python reader accepted its line."""
+    assert cyvcf2 is not None
     try:
         reader = cyvcf2.VCF(os.fspath(file_path))
     except Exception as exc:  # noqa: BLE001 — cyvcf2 raises OSError or a bare Exception ("cannot parse VCF header")
-        raise ValueError(f"{file_path.name} could not be read as a VCF file ({exc}).") from None
+        raise VcfReadError(str(exc), stage="header") from None
     try:
-        records = iter(reader)
-        while True:
+        variants = iter(reader)
+        for line in text_reader.records():
             try:
-                record = next(records)
+                variant = next(variants)
             except StopIteration:
-                return
+                raise VcfReadError(f"htslib stopped reading before line {line.line}", stage="records") from None
             except Exception as exc:  # noqa: BLE001 — cyvcf2 reports htslib failures with assorted types
-                raise ValueError(
-                    f"{file_path.name} could not be read completely: the file is truncated or not a valid VCF ({exc})."
-                ) from None
-            yield from _split_record(record)
+                raise VcfReadError(f"line {line.line}: {exc}", stage="records", line=line.line) from None
+            if variant.POS != line.POS or variant.CHROM != line.CHROM:
+                raise VcfReadError(f"line {line.line} was read inconsistently by htslib", stage="records")
+            yield variant
     finally:
         reader.close()
 
 
-def _split_record(record: cyvcf2.Variant) -> Iterator[ClinVarRecord]:
+def _split_record(record: Any) -> Iterator[ClinVarRecord]:
+    """Panel ClinVarRecords of one cyvcf2 ``Variant`` or :class:`~ge_ehr.services.vcf_backend.TextRecord`."""
     chrom = C.normalize_chrom(record.CHROM)
     info = record.INFO
     gene = panel_gene(chrom, record.POS, _info_text(info.get("GENEINFO")))

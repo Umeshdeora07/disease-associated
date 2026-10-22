@@ -7,10 +7,11 @@ import random
 from pathlib import Path
 from typing import Any
 
-import cyvcf2
 import pytest
 
 from ge_ehr.services import vcf_parser
+from ge_ehr.services.clinvar import _bgzf_blocks
+from ge_ehr.services.vcf_backend import cyvcf2  # None without cyvcf2 (no Windows wheels)
 from ge_ehr.services.vcf_parser import BGZF_EOF, ParsedVariant, ParsedVcf, VcfError, parse_patient_vcf
 
 DATA = Path(__file__).parent / "data"
@@ -56,8 +57,17 @@ def keys(parsed: ParsedVcf) -> list[str]:
     return [f"{v.chrom}-{v.pos}-{v.ref}-{v.alt}" for v in parsed.variants]
 
 
+requires_cyvcf2 = pytest.mark.skipif(cyvcf2 is None, reason="cyvcf2 (htslib) is not installed")
+
+
 def bgzip_with_htslib(source: Path, target: Path) -> bytes:
-    """Re-write a VCF as BGZF with htslib (cyvcf2's Writer), independently of GE-EHR's writer."""
+    """Re-write a VCF as BGZF with htslib (cyvcf2's Writer), independently of GE-EHR's writer.
+
+    Without cyvcf2 (e.g. on Windows) GE-EHR's own BGZF writer stands in.
+    """
+    if cyvcf2 is None:
+        target.write_bytes(b"".join(_bgzf_blocks(source.read_bytes())))
+        return target.read_bytes()
     reader = cyvcf2.VCF(str(source))
     writer = cyvcf2.Writer(str(target), reader, mode="wz")
     for variant in reader:
@@ -610,7 +620,7 @@ def test_fuzzed_fixture_never_raises_anything_but_vcf_error() -> None:
 # ---------------------------------------------------------------------------
 
 
-_REAL_VCF = cyvcf2.VCF
+_REAL_VCF = cyvcf2.VCF if cyvcf2 is not None else None
 
 
 class _FailingReader:
@@ -632,7 +642,9 @@ class _FailingReader:
         self._reader.close()
 
 
+@requires_cyvcf2
 def test_htslib_read_error_reports_the_records_line(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GE_EHR_VCF_BACKEND", "cyvcf2")
     monkeypatch.setattr(
         vcf_parser.cyvcf2, "VCF", lambda path: _FailingReader(path, good=1, error=Exception("bcf_read failed"))
     )
@@ -641,14 +653,19 @@ def test_htslib_read_error_reports_the_records_line(monkeypatch: pytest.MonkeyPa
     assert error.message == "This variant record could not be read; check its CHROM, POS, REF, ALT, FILTER and GT values."
 
 
+@requires_cyvcf2
 def test_htslib_silently_stopping_early_is_detected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GE_EHR_VCF_BACKEND", "cyvcf2")
     monkeypatch.setattr(vcf_parser.cyvcf2, "VCF", lambda path: _FailingReader(path, good=1, error=None))
     error = rejected(vcf(record("chr7", 44145200), record("chr7", 44145300)))
     assert error.line == 5
     assert error.message == "The file could not be read completely: it has 2 variant records but only 1 could be read."
 
 
+@requires_cyvcf2
 def test_htslib_open_failure_is_a_vcf_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GE_EHR_VCF_BACKEND", "cyvcf2")
+
     def refuse(path: str) -> None:
         raise OSError("Error reading file")
 

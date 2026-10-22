@@ -2,15 +2,19 @@
 
 Class attributes hold static defaults; :meth:`Config.settings` adds the values read from the
 environment *when the app is created* (not at import time), then explicit overrides, then
-validates the result. Owned by the Foundation work package.
+validates the result. :func:`instance_secret_key` gives local installs (``python run.py``) a
+persistent random SECRET_KEY instead of the fixed development one. Owned by the Foundation work
+package; the secret-key file and VCF backend check were added for local installs (portability).
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import secrets
 from collections.abc import Mapping
 from datetime import timedelta
+from pathlib import Path
 from typing import Any, ClassVar
 
 from sqlalchemy.pool import StaticPool
@@ -19,6 +23,8 @@ DEFAULT_DEMO_PASSWORD = "Demo-Pass-2026!"
 DEFAULT_CLINVAR_SYNC_URL = "https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_GRCh38/clinvar.vcf.gz"
 DEVELOPMENT_SECRET_KEY = "ge-ehr-development-only-secret-key"  # never accepted in production
 SQLITE_FILE_NAME = "ge_ehr.db"
+SECRET_KEY_FILE_NAME = "secret_key"
+MIN_SECRET_KEY_LENGTH = 16
 
 
 def database_url(raw: str | None, instance_path: str) -> str:
@@ -32,6 +38,42 @@ def database_url(raw: str | None, instance_path: str) -> str:
     if raw.startswith("postgres://"):
         return "postgresql://" + raw.removeprefix("postgres://")
     return raw
+
+
+def instance_secret_key(instance_path: str | os.PathLike[str]) -> str:
+    """The persistent random SECRET_KEY of an instance folder, created on first use.
+
+    The key lives in ``<instance>/secret_key`` (64 hex characters from :mod:`secrets`, written
+    with owner-only permissions where the operating system supports them), so sessions survive
+    restarts and no shared key is hard-coded. Two processes starting at once agree on one key
+    (the file is created exclusively). An empty file is replaced; a key shorter than 16
+    characters is refused with RuntimeError (delete the file to get a new one).
+    """
+    path = Path(instance_path) / SECRET_KEY_FILE_NAME
+    path.parent.mkdir(parents=True, exist_ok=True)
+    for _attempt in range(2):
+        try:
+            key = path.read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            key = ""
+        else:
+            if len(key) >= MIN_SECRET_KEY_LENGTH:
+                return key
+            if key:
+                raise RuntimeError(
+                    f"{path} holds a SECRET_KEY shorter than {MIN_SECRET_KEY_LENGTH} characters; "
+                    "delete the file to generate a new random key."
+                )
+            path.unlink(missing_ok=True)  # an empty file left by an interrupted first start
+        try:
+            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            continue  # another process created it first: read its key
+        key = secrets.token_hex(32)
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(key + "\n")
+        return key
+    raise RuntimeError(f"Could not create {path}; check that the instance folder is writable.")
 
 
 def _non_negative_int(name: str, raw: str) -> int:
@@ -119,6 +161,11 @@ class Config:
             raise ValueError(f"LOG_LEVEL {values['LOG_LEVEL']!r} is not a valid logging level.")
         if not values.get("SECRET_KEY"):
             raise RuntimeError(f"SECRET_KEY is not set for the {cls.NAME} configuration.")
+        # GE_EHR_VCF_BACKEND is read by the VCF readers on every call; check it at start-up so a
+        # typo or a missing cyvcf2 is reported now rather than at the first upload.
+        from .services.vcf_backend import vcf_backend
+
+        vcf_backend()
 
 
 class DevelopmentConfig(Config):

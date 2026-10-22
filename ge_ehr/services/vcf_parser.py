@@ -1,4 +1,4 @@
-"""F1 — patient VCF validation and parsing with cyvcf2 (SPEC §4).
+"""F1 — patient VCF validation and parsing with cyvcf2 (SPEC §4), with a pure-Python fallback.
 
 Parsing runs in two passes:
 
@@ -10,6 +10,12 @@ Parsing runs in two passes:
    first sample's GT — under a fixed header, so header lines, INFO and other FORMAT fields of the
    upload never reach htslib. cyvcf2 splits multi-allelic records, decodes the genotype (zygosity)
    and the FILTER and 7-gene panel filters are applied with counters.
+
+   Where cyvcf2 is not installed (it has no Windows wheels) or ``GE_EHR_VCF_BACKEND=python``
+   selects it (:func:`~ge_ehr.services.vcf_backend.vcf_backend`), :class:`_NormalisedRecord`
+   decodes the same normalised lines in memory exactly as htslib does (genotype alleles and
+   phasing, FILTER verdict, htslib's 65,534-ALT-allele limit), so both backends return identical
+   results and errors.
 
 Each record is counted in at most one skip counter, checked in this order: outside the panel
 (``off_panel_skipped``), FILTER other than ``PASS``/``.`` (``non_pass_skipped``), no ALT allele in
@@ -31,20 +37,15 @@ import zlib
 from array import array
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import TextIO
-
-import cyvcf2
+from typing import Any, TextIO
 
 from ..constants import GRCH37_CONTIG_LENGTHS, GRCH38_CONTIG_LENGTHS, gene_for_position, normalize_chrom
 
-logger = logging.getLogger(__name__)
+# The normalised copy declares no contigs, so htslib adds each one with a warning; vcf_backend
+# keeps htslib to errors only when it imports cyvcf2 (``cyvcf2`` is None when not installed).
+from .vcf_backend import HTS_LOG_ERROR, cyvcf2, vcf_backend  # noqa: F401 — HTS_LOG_ERROR re-exported
 
-# The normalised copy declares no contigs, so htslib adds each one with a warning; input is
-# validated before htslib sees it, so keep errors only (unless an operator chose a level with
-# cyvcf2's own CYVCF2_HTSLIB_LOG_LEVEL variable).
-HTS_LOG_ERROR = 1
-if "CYVCF2_HTSLIB_LOG_LEVEL" not in os.environ:
-    cyvcf2.cyvcf2.set_htslib_log_level(HTS_LOG_ERROR)
+logger = logging.getLogger(__name__)
 
 SUPPORTED_VERSIONS: tuple[str, ...] = ("VCFv4.1", "VCFv4.2", "VCFv4.3")
 FIXED_COLUMNS: tuple[str, ...] = ("#CHROM", "POS", "ID", "REF", "ALT", "QUAL", "FILTER", "INFO")
@@ -169,18 +170,23 @@ def parse_patient_vcf(data: bytes, filename: str = "upload.vcf") -> ParsedVcf:
     (0 variants) with a warning. ``filename`` is only used in log messages.
     """
     text = _decode(_decompress(data))
-    with tempfile.TemporaryDirectory(prefix="ge_ehr_vcf_") as workdir:
-        normalised_path = os.path.join(workdir, "normalised.vcf")
-        with open(normalised_path, "w", encoding="utf-8", newline="\n") as normalised:
-            validated = _validate(text, normalised)
+    if vcf_backend() == "cyvcf2":
+        with tempfile.TemporaryDirectory(prefix="ge_ehr_vcf_") as workdir:
+            normalised_path = os.path.join(workdir, "normalised.vcf")
+            with open(normalised_path, "w", encoding="utf-8", newline="\n") as normalised:
+                validated = _validate(text, normalised)
+            del text
+            parsed = _parsed_vcf(validated)
+            if validated.record_count:
+                _read_records(normalised_path, validated, parsed)
+    else:
+        buffer = io.StringIO(newline="\n")
+        validated = _validate(text, buffer)
         del text
-        parsed = ParsedVcf(
-            sample_id=validated.samples[0], fileformat=validated.fileformat, warnings=validated.warnings
-        )
-        if validated.record_count == 0:
-            parsed.warnings.append("The file contains no variant records (header only); no variants were imported.")
-        else:
-            _read_records(normalised_path, validated, parsed)
+        parsed = _parsed_vcf(validated)
+        if validated.record_count:
+            buffer.seek(0)
+            _read_records_in_python(buffer, validated, parsed)
     logger.info(
         "Parsed patient VCF %r: %d records, %d panel variants, %d off panel, %d non-PASS, %d reference calls",
         filename,
@@ -190,6 +196,13 @@ def parse_patient_vcf(data: bytes, filename: str = "upload.vcf") -> ParsedVcf:
         parsed.non_pass_skipped,
         parsed.ref_calls_skipped,
     )
+    return parsed
+
+
+def _parsed_vcf(validated: _ValidatedFile) -> ParsedVcf:
+    parsed = ParsedVcf(sample_id=validated.samples[0], fileformat=validated.fileformat, warnings=validated.warnings)
+    if validated.record_count == 0:
+        parsed.warnings.append("The file contains no variant records (header only); no variants were imported.")
     return parsed
 
 
@@ -562,6 +575,68 @@ def _read_records(path: str, validated: _ValidatedFile, parsed: ParsedVcf) -> No
             f"{parsed.total_records} could be read.",
             line=validated.line_of(parsed.total_records),
         )
+    _add_skip_warnings(parsed, symbolic, duplicates)
+
+
+def _read_records_in_python(normalised: TextIO, validated: _ValidatedFile, parsed: ParsedVcf) -> None:
+    """The pure-Python twin of :func:`_read_records`: decode the normalised lines like htslib."""
+    seen: set[tuple[str, int, str, str]] = set()
+    symbolic: list[str] = []
+    duplicates: list[str] = []
+    for _ in range(_NORMALISED_HEADER.count("\n")):
+        normalised.readline()
+    for index, line in enumerate(normalised):
+        record = _NormalisedRecord.parse(line.removesuffix("\n"))
+        if record is None:
+            raise VcfError(
+                "This variant record could not be read; check its CHROM, POS, REF, ALT, FILTER and GT values.",
+                line=validated.line_of(index),
+            )
+        parsed.total_records += 1
+        _add_record(record, parsed, seen, symbolic, duplicates)
+    _add_skip_warnings(parsed, symbolic, duplicates)
+
+
+# htslib stores the allele count in 16 bits and refuses records with 65,535 alleles or more.
+_HTSLIB_MAX_ALLELES = 65_534
+
+
+@dataclass(frozen=True)
+class _NormalisedRecord:
+    """One line of the normalised copy, decoded with cyvcf2's attribute names and values."""
+
+    CHROM: str
+    POS: int
+    REF: str
+    ALT: list[str]
+    FILTER: str | None
+    FILTERS: list[str]
+    genotypes: list[list[Any]]
+
+    @classmethod
+    def parse(cls, line: str) -> _NormalisedRecord | None:
+        """Decode ``CHROM POS . REF ALT . VERDICT . GT genotype``; None where htslib fails."""
+        chrom, pos, _id, ref, alt, _qual, verdict, _info, _format, genotype = line.split("\t")
+        alts = [] if alt == "." else alt.split(",")
+        if len(alts) > _HTSLIB_MAX_ALLELES:
+            return None
+        alleles: list[Any] = [-1 if allele == "." else int(allele) for allele in _GENOTYPE_SEPARATOR.split(genotype)]
+        # cyvcf2 reports a genotype as phased when its first separator is "|" (htslib keeps the
+        # phase bit on the second allele); haploid calls are unphased.
+        separator = _GENOTYPE_SEPARATOR.search(genotype)
+        alleles.append(separator is not None and separator.group() == "|")
+        return cls(
+            CHROM=chrom,
+            POS=int(pos),
+            REF=ref,
+            ALT=alts,
+            FILTER=None if verdict in _PASSING_FILTERS else verdict,
+            FILTERS=[] if verdict == "." else [verdict],
+            genotypes=[alleles],
+        )
+
+
+def _add_skip_warnings(parsed: ParsedVcf, symbolic: list[str], duplicates: list[str]) -> None:
     if symbolic:
         parsed.warnings.append(
             f"{len(symbolic)} symbolic or breakend ALT allele(s) (e.g. {symbolic[0]}) were skipped: "
@@ -575,13 +650,14 @@ def _read_records(path: str, validated: _ValidatedFile, parsed: ParsedVcf) -> No
 
 
 def _add_record(
-    record: cyvcf2.Variant,
+    record: Any,
     parsed: ParsedVcf,
     seen: set[tuple[str, int, str, str]],
     symbolic: list[str],
     duplicates: list[str],
 ) -> None:
-    """Apply the panel, FILTER and genotype filters to one record and keep its carried ALT alleles."""
+    """Apply the panel, FILTER and genotype filters to one record (a cyvcf2 ``Variant`` or a
+    :class:`_NormalisedRecord`) and keep its carried ALT alleles."""
     chrom, pos = normalize_chrom(record.CHROM), record.POS
     gene = gene_for_position(chrom, pos)
     if gene is None:

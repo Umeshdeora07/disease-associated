@@ -1,0 +1,12 @@
+# GE-EHR development and test tools, installed on top of the runtime requirements:
+#
+#     python -m pip install -r requirements.txt -r requirements-dev.txt
+#     python -m pytest -q                      # run the test suite from the repository root
+#
+# Playwright is only needed for browser checks of the web pages; it also needs a browser:
+#     python -m playwright install chromium
+-r requirements.txt
+
+pytest==9.1.1
+pytest-cov==7.1.0
+playwright==1.64.0

@@ -17,7 +17,6 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
-import cyvcf2
 import pytest
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import event, func, insert, select
@@ -42,6 +41,7 @@ from ge_ehr.services.clinvar import (
     unescape_info_value,
     write_clinvar_vcf,
 )
+from ge_ehr.services.vcf_backend import cyvcf2  # None without cyvcf2 (no Windows wheels)
 from ge_ehr.services.vcf_parser import BGZF_EOF
 from tests.factories import add_known_variant, make_release, make_user
 
@@ -378,9 +378,10 @@ def test_write_clinvar_vcf_gz_is_bgzf_readable_by_htslib_and_gzip(tmp_path: Path
     assert data[:4] == b"\x1f\x8b\x08\x04" and data[12:14] == b"BC" and data.endswith(BGZF_EOF)
     assert data.count(b"\x1f\x8b\x08\x04\x00\x00\x00\x00\x00\xff\x06\x00BC") > 2  # several blocks
     assert sum(not line.startswith("#") for line in gzip.decompress(data).decode().splitlines()) == 3000
-    reader = cyvcf2.VCF(str(path))
-    assert sum(1 for _ in reader) == 3000
-    reader.close()
+    if cyvcf2 is not None:  # htslib reads it too
+        reader = cyvcf2.VCF(str(path))
+        assert sum(1 for _ in reader) == 3000
+        reader.close()
 
 
 def test_written_records_round_trip_through_the_reader(tmp_path: Path) -> None:

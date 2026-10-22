@@ -8,9 +8,10 @@ from __future__ import annotations
 
 from flask import Flask
 
-from . import clinvar_cmds, demo_cmds, reeval_cmds, rules_cmds, user_cmds
+from . import alert_cmds, clinvar_cmds, demo_cmds, patient_cmds, reeval_cmds, rules_cmds, user_cmds
 
-COMMAND_MODULES = (user_cmds, clinvar_cmds, rules_cmds, reeval_cmds, demo_cmds)
+# patient_cmds and alert_cmds (the terminal patient/alert workflow) belong to the CLI work package.
+COMMAND_MODULES = (user_cmds, clinvar_cmds, rules_cmds, reeval_cmds, demo_cmds, patient_cmds, alert_cmds)
 
 
 def register_commands(app: Flask) -> None:

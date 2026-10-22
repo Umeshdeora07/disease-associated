@@ -1,7 +1,11 @@
-# GE-EHR for monogenic diabetes — pinned direct dependencies (Python 3.13).
-# Transitive dependencies (Werkzeug, Jinja2, alembic, numpy, pydantic, ...) are resolved by pip.
+# GE-EHR for monogenic diabetes — pinned runtime dependencies (Python 3.13).
+# Local install on Windows, macOS or Linux (inside a virtual environment):
+#
+#     python -m pip install -r requirements.txt                           # run the app
+#     python -m pip install -r requirements.txt -r requirements-dev.txt   # ... and the tests
+#
+# Transitive dependencies (Werkzeug, Jinja2, alembic, pydantic, ...) are resolved by pip.
 
-# --- Runtime -----------------------------------------------------------------
 Flask==3.1.3
 Flask-SQLAlchemy==3.1.1
 SQLAlchemy==2.1.5
@@ -9,13 +13,18 @@ Flask-Login==0.6.3
 Flask-WTF==1.3.0
 WTForms==3.2.2
 Flask-Migrate==4.1.0
-cyvcf2==0.34.0
 fhir.resources==8.3.0
-gunicorn==26.2.0
-psycopg2-binary==2.9.13
 python-dotenv==1.2.4
 
-# --- Development / testing ---------------------------------------------------
-pytest==9.1.1
-pytest-cov==7.1.0
-playwright==1.64.0
+# Pure-Python production WSGI server (works on Windows): `python run.py` serves the app with it.
+waitress==3.0.2
+
+# VCF parsing with htslib, as specified in the paper (numpy is installed with it). cyvcf2 has no
+# Windows wheels and cannot be built there, so Windows skips it and GE-EHR uses its built-in
+# pure-Python reader, which returns identical results (ge_ehr/services/vcf_backend.py). If cyvcf2
+# fails to install on another platform, delete this line: the built-in reader takes over.
+cyvcf2==0.34.0; platform_system != "Windows"
+
+# Optional, not installed by default: PostgreSQL instead of the default SQLite file needs
+#     python -m pip install psycopg2-binary
+# (see DATABASE_URL in .env.example).

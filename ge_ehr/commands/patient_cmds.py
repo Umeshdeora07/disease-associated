@@ -27,19 +27,18 @@ from __future__ import annotations
 import json
 import logging
 import re
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
 import click
-from flask import Flask
-from flask.cli import AppGroup
+from flask import Flask, current_app
 from sqlalchemy import select
 
 from .. import constants as C
 from ..extensions import db
-from ..models import Alert, AuditLog, GenomicUpload, Medication, Patient, User
+from ..models import Alert, AlertEvent, AuditLog, GenomicUpload, Medication, Patient, User
 from ..patients import queries
 from ..patients.routes import describe_outcome
 from ..security import audit
@@ -54,11 +53,27 @@ from . import _format as F
 logger = logging.getLogger(__name__)
 
 DEFAULT_LIST_LIMIT = 50
-DATE = click.DateTime(formats=["%Y-%m-%d"])
 
-patients_cli = AppGroup(
+
+class IsoDate(click.ParamType):
+    """A calendar date written ``YYYY-MM-DD`` (converted to :class:`datetime.date`)."""
+
+    name = "YYYY-MM-DD"
+
+    def convert(self, value: Any, param: click.Parameter | None, ctx: click.Context | None) -> date:
+        if isinstance(value, date):
+            return value
+        try:
+            return date.fromisoformat(str(value).strip())
+        except ValueError:
+            self.fail(f"{value!r} is not a date; write it as YYYY-MM-DD, e.g. 2026-01-15.", param, ctx)
+
+
+DATE = IsoDate()
+
+patients_cli = F.command_group(
     "patients",
-    help="""Find, view and update patient records (synthetic data only).
+    """Find, view and update patient records (synthetic data only).
 
     \b
     Examples:
@@ -81,14 +96,6 @@ def as_option(*, required: bool, help_text: str | None = None) -> Callable[[Call
     return click.option("--as", "as_user", metavar="USERNAME", required=required, help=help_text or default_help)
 
 
-def _date(value: datetime | None) -> date | None:
-    return value.date() if value is not None else None
-
-
-def _plural(count: int, singular: str, plural_form: str | None = None) -> str:
-    return F.plural(count, singular, plural_form)
-
-
 # ---------------------------------------------------------------------------
 # Re-evaluation outcome and findings
 # ---------------------------------------------------------------------------
@@ -98,19 +105,17 @@ def _finding_order(alert: Alert) -> tuple[Any, ...]:
     return (alert.kind != "alert", -C.SEVERITY_ORDER.get(alert.severity or "", -1), rule_code_sort_key(alert.rule_code), alert.id)
 
 
-def _finding_line(alert: Alert, action: str) -> str:
-    """``+ new alert  #21 D2 v1 HIGH  HNF1A 12-… (P)  HNF1A diabetes on insulin or metformin``."""
+def _finding_row(alert: Alert, action: str) -> list[str]:
+    """``+ new alert | #21 | D2 v1 | HIGH | HNF1A 12-… (P) | HNF1A diabetes on insulin or metformin``."""
     rule = alert.confirmed_rule_version.label if alert.confirmed_rule_version is not None else alert.rule_code
-    what = f"{action} {alert.kind}".ljust(17)
-    parts = [
-        what,
+    return [
+        f"{action} {alert.kind}",
         f"#{alert.id}",
         rule,
         F.severity_label(alert.severity),
         f"{F.variant_text(alert.variant_key)} ({F.class_label(alert.classification)})",
         alert.title,
     ]
-    return F.shorten("  " + "  ".join(parts), F.WIDTH)
 
 
 def echo_outcome(result: ReconcileResult | None, user: User | None) -> None:
@@ -124,10 +129,10 @@ def echo_outcome(result: ReconcileResult | None, user: User | None) -> None:
     F.echo(describe_outcome(result))
     if result is None:
         return
-    for alert in sorted(result.created, key=_finding_order):
-        F.echo(_finding_line(alert, "+ new"))
-    for alert in sorted(result.superseded, key=_finding_order):
-        F.echo(_finding_line(alert, "- superseded"))
+    rows = [_finding_row(alert, "+ new") for alert in sorted(result.created, key=_finding_order)]
+    rows += [_finding_row(alert, "- superseded") for alert in sorted(result.superseded, key=_finding_order)]
+    for line in F.table_lines(None, rows, flex=5):
+        F.echo(line)
 
 
 def _evidence_text(finding: queries.FindingView) -> str:
@@ -138,20 +143,31 @@ def _evidence_text(finding: queries.FindingView) -> str:
     return f"{release}; rule {finding.rule_label}; {created}"
 
 
-def _echo_finding(finding: queries.FindingView, *, indent: int = 4) -> None:
-    """One current alert or note: header, variant, recommendation, source and evidence."""
+def _now_text(alert: Alert) -> str:
+    """The finding's status today, for the point-in-time view."""
+    if alert.status == "superseded":
+        reason = C.SUPERSEDED_REASON_LABELS.get(alert.superseded_reason or "", alert.superseded_reason)
+        return f"superseded {F.when(alert.superseded_at)} ({reason})"
+    return f"still current ({alert.status})"
+
+
+def _echo_finding(finding: queries.FindingView, *, indent: int = 4, as_of: bool = False) -> None:
+    """One alert or note: header, variant, recommendation, source and evidence.
+
+    ``as_of``: the finding as it stood at a past point in time — its status today is added and
+    no review hint is offered.
+    """
     alert = finding.alert
     margin = " " * indent
-    markers = []
+    names = []
     if alert.is_reclassified:
-        markers.append(F.flag("Reclassified"))
+        names.append("Reclassified")
     if alert.priority == "high":
-        markers.append(F.flag("High priority"))
-    header = [f"#{alert.id}", finding.rule_label, F.status_label(finding.status), alert.title]
-    line = margin + "  ".join(header)
-    F.echo(F.shorten(line, F.WIDTH - (F.visible_length(", ".join(markers)) + 2 if markers else 0)) + (
-        "  " + ", ".join(markers) if markers else ""
-    ))
+        names.append("High priority")
+    markers = F.flags(names)
+    header = margin + "  ".join([f"#{alert.id}", finding.rule_label, F.status_label(finding.status), alert.title])
+    budget = F.WIDTH - (F.visible_length(markers) + 2 if markers else 0)
+    F.echo(F.shorten(header, budget) + (f"  {markers}" if markers else ""))
     options = {"label_width": 14, "indent": indent + 4}
     F.field("Variant", f"{F.variant_text(alert.variant_key)} - {F.class_label(finding.classification, long=True)}", **options)
     F.field("Recommendation" if alert.kind == "alert" else "Note", alert.message, **options)
@@ -161,22 +177,29 @@ def _echo_finding(finding: queries.FindingView, *, indent: int = 4) -> None:
         who = alert.reviewed_by.username if alert.reviewed_by is not None else "unknown user"
         review = f"{F.when(alert.reviewed_at)} by {who}" + (f": {alert.review_comment}" if alert.review_comment else "")
         F.field("Reviewed", review, **options)
-    elif finding.status == "active":
+    elif finding.status == "active" and not as_of:
         F.field("Review", f"flask alerts review {alert.id} --as USERNAME [--comment TEXT]", **options)
+    if as_of:
+        F.field("Now", _now_text(alert), **options)
 
 
-def _echo_findings(groups: Sequence[tuple[str, Sequence[queries.FindingView]]], notes: Sequence[queries.FindingView]) -> None:
+def _echo_findings(
+    groups: Sequence[tuple[str, Sequence[queries.FindingView]]],
+    notes: Sequence[queries.FindingView],
+    *,
+    as_of: bool = False,
+) -> None:
     if not groups and not notes:
         F.echo("  No alerts or notes.")
         return
     for severity, findings in groups:
         F.echo(f"  {F.severity_label(severity)} ({len(findings)})")
         for finding in findings:
-            _echo_finding(finding)
+            _echo_finding(finding, as_of=as_of)
     if notes:
         F.echo(f"  NOTES ({len(notes)}) - genetic criterion met, clinical condition not met: no alert raised")
         for finding in notes:
-            _echo_finding(finding)
+            _echo_finding(finding, as_of=as_of)
 
 
 # ---------------------------------------------------------------------------
@@ -184,8 +207,21 @@ def _echo_findings(groups: Sequence[tuple[str, Sequence[queries.FindingView]]], 
 # ---------------------------------------------------------------------------
 
 
-def _alert_counts_text(counts: dict[str, int] | Any) -> str:
-    return ", ".join(f"{count} {F.severity_label(severity).lower() if not F.color_enabled() else F.style(severity, **F.SEVERITY_STYLES[severity])}" for severity, count in counts.items())
+def _alert_counts_text(counts: Mapping[str, int]) -> str:
+    """``1 high, 2 low`` (severities coloured)."""
+    return ", ".join(
+        f"{count} {F.style(severity, **F.SEVERITY_STYLES.get(severity, {}))}" for severity, count in counts.items()
+    )
+
+
+_AGE_UNITS = {"years": "y", "year": "y", "months": "mo", "month": "mo"}
+
+
+def _age_sex(patient: Patient, age: str) -> str:
+    """``32 y, F`` — compact age and sex for the patient list (``8 mo, M`` below two years)."""
+    number, _space, unit = age.partition(" ")
+    sex = C.SEX_LABELS.get(patient.sex, patient.sex or "?")[:1]
+    return f"{number} {_AGE_UNITS.get(unit, unit)}, {sex}"
 
 
 @patients_cli.command("list")
@@ -224,10 +260,11 @@ def list_command(
         if filters.active:
             F.echo("No patients match. Try a shorter --search text or drop a filter.")
         else:
-            F.echo("No patients yet. Create one with 'flask patients create --help' or load the demo with 'flask seed-demo'.")
+            F.echo("No patients yet. Create one:    flask patients create --help")
+            F.echo("or load the demo dataset:       flask seed-demo")
         return
     rows = queries.patient_list_rows(page.items, include_alerts=show_alerts)
-    headers = ["MRN", "NAME", "SEX", "AGE", "DIABETES", "FAMILY", "P/LP", "LAST VCF"]
+    headers = ["MRN", "NAME", "AGE/SEX", "DIABETES", "FAMILY", "P/LP", "LAST VCF"]
     if show_alerts:
         headers.append("CURRENT ALERTS")
     body = []
@@ -237,8 +274,7 @@ def list_command(
         values: list[Any] = [
             patient.mrn,
             patient.display_name,
-            C.SEX_LABELS.get(patient.sex, patient.sex),
-            row.age,
+            _age_sex(patient, row.age),
             C.DIABETES_TYPE_LABELS.get(diagnosis.diabetes_type, diagnosis.diabetes_type) if diagnosis else None,
             patient.family_id,
             row.actionable_variants,
@@ -247,12 +283,13 @@ def list_command(
         if show_alerts:
             values.append(_alert_counts_text(row.alert_counts) or "none")
         body.append(values)
-    F.table(headers, body, flex=1)
+    F.table(headers, body, flex=1, indent=0)
     shown = len(page.items)
     if page.total and page.total > shown:
         F.echo(f"\nShowing {shown} of {page.total} patients; narrow with --search or --family, or raise --limit.")
     else:
-        F.echo(f"\n{_plural(shown, 'patient')}. Details: flask patients show MRN")
+        F.echo(f"\n{F.plural(shown, 'patient')}. Details: flask patients show MRN")
+    F.echo("P/LP = actionable (pathogenic or likely pathogenic) variants." + ("  Alerts: flask alerts list" if show_alerts else ""))
 
 
 # ---------------------------------------------------------------------------
@@ -267,7 +304,7 @@ def _diagnosis_text(patient: Patient) -> str:
     parts = [C.DIABETES_TYPE_LABELS.get(diagnosis.diabetes_type, diagnosis.diabetes_type)]
     if diagnosis.age_at_diagnosis_months is not None:
         months = diagnosis.age_at_diagnosis_months
-        parts.append(f"diagnosed at {_plural(months, 'month')} ({months_to_age(months)})")
+        parts.append(f"diagnosed at {F.plural(months, 'month')} ({months_to_age(months)})")
     if diagnosis.diagnosed_on is not None:
         parts.append(f"on {F.day(diagnosis.diagnosed_on)}")
     return ", ".join(parts)
@@ -302,7 +339,7 @@ def _echo_medications(patient: Patient) -> None:
     else:
         F.echo("  None recorded.")
     if stopped:
-        F.echo("  Stopped: " + "; ".join(f"{m.drug_name} (until {F.day(m.end_date)})" for m in stopped))
+        F.paragraph("Stopped: " + "; ".join(f"{m.drug_name} (until {F.day(m.end_date)})" for m in stopped))
 
 
 def _review_text(row: queries.ProfileVariant) -> str:
@@ -326,13 +363,14 @@ def _variant_flags(row: queries.ProfileVariant) -> list[str]:
 def _echo_profile(patient: Patient) -> None:
     profile = queries.genomic_profile(patient)
     release = profile.release.label if profile.release is not None else None
-    F.heading(f"Genomic profile ({profile.actionable_count} actionable of {_plural(len(profile.variants), 'panel variant')})")
+    F.heading(f"Genomic profile ({profile.actionable_count} actionable of {F.plural(len(profile.variants), 'panel variant')})")
     if release:
         F.echo(f"  Classified against {release}" + (f"; history across {len(profile.releases)} activated releases." if len(profile.releases) > 1 else "."))
     else:
         F.echo("  No knowledge-base release is active, so the variants are not classified yet.")
     if not profile.variants:
-        F.echo(f"  No genomic data yet. Upload a GRCh38 VCF with: flask patients upload-vcf {patient.mrn} PATH --as USERNAME")
+        F.echo("  No genomic data yet. Upload a GRCh38 VCF with:")
+        F.echo(f"    flask patients upload-vcf {patient.mrn} PATH --as USERNAME")
         return
     F.table(
         ["GENE", "VARIANT", "ZYGOSITY", "CLASS", "REVIEW", "HISTORY", "FLAGS"],
@@ -407,7 +445,7 @@ def _echo_recommendations(patient: Patient) -> None:
     for notice in view.open_notices:
         F.notice_block(notice, indent=2, with_patient=False)
     if view.history:
-        F.echo(f"\n  {_plural(len(view.history), 'superseded finding')}: flask patients history {patient.mrn}")
+        F.echo(f"\n  {F.plural(len(view.history), 'superseded finding')}: flask patients history {patient.mrn}")
 
 
 @patients_cli.command("show")
@@ -416,8 +454,8 @@ def _echo_recommendations(patient: Patient) -> None:
 def show_command(mrn: str, as_user: str | None) -> None:
     """Show one patient: record, medications, genomic profile, uploads and recommendations.
 
-    Lab technicians (``--as`` a lab technician account) see everything except alerts, notes and
-    review notices (SPEC §8.1).
+    With --as naming a lab technician account, everything except alerts, notes and review
+    notices is shown (lab technicians do not see recommendations).
 
     \b
     Examples:
@@ -467,10 +505,10 @@ def create_command(
     given_name: str,
     family_name: str,
     sex: str,
-    birth_date: datetime,
+    birth_date: date,
     diabetes_type: str,
     age_at_diagnosis_months: int | None,
-    diagnosed_on: datetime | None,
+    diagnosed_on: date | None,
     family_id: str | None,
     notes: str | None,
 ) -> None:
@@ -488,15 +526,15 @@ def create_command(
             given_name=given_name,
             family_name=family_name,
             sex=sex.lower(),
-            birth_date=birth_date.date(),
+            birth_date=birth_date,
             family_id=family_id,
             notes=notes,
             diabetes_type=diabetes_type.lower(),
             age_at_diagnosis_months=age_at_diagnosis_months,
-            diagnosed_on=_date(diagnosed_on),
+            diagnosed_on=diagnosed_on,
             user=user,
         )
-    F.echo(
+    F.say(
         f"Created patient {F.patient_text(patient)} ({C.SEX_LABELS[patient.sex]}, born {F.day(patient.birth_date)}; "
         f"diagnosis: {_diagnosis_text(patient)})."
     )
@@ -512,6 +550,12 @@ def _diagnosis_values(patient: Patient) -> dict[str, Any]:
         "age_at_diagnosis_months": diagnosis.age_at_diagnosis_months if diagnosis else None,
         "diagnosed_on": diagnosis.diagnosed_on if diagnosis else None,
     }
+
+
+def _diagnosis_value_text(name: str, value: Any) -> str:
+    if name == "diabetes_type" and value:
+        return C.DIABETES_TYPE_LABELS.get(value, value)
+    return F.text(value)
 
 
 _DIAGNOSIS_FIELD_LABELS = {
@@ -540,11 +584,11 @@ def set_diagnosis_command(
     diabetes_type: str,
     age_at_diagnosis_months: int | None,
     unknown_age: bool,
-    diagnosed_on: datetime | None,
+    diagnosed_on: date | None,
 ) -> None:
     """Set the diabetes diagnosis and re-evaluate the patient's decision support.
 
-    Values not given keep their recorded value (type ``none`` clears the age and date).
+    Values not given keep their recorded value (type "none" clears the age and date).
 
     \b
     Examples:
@@ -561,7 +605,7 @@ def set_diagnosis_command(
     age = age_at_diagnosis_months
     if age is None and not unknown_age and not no_diabetes:
         age = before["age_at_diagnosis_months"]
-    on = _date(diagnosed_on)
+    on = diagnosed_on
     if on is None and not no_diabetes:
         on = before["diagnosed_on"]
     notes = patient.diagnosis.notes if patient.diagnosis is not None else None
@@ -571,12 +615,13 @@ def set_diagnosis_command(
         )
     after = _diagnosis_values(patient)
     changes = [
-        f"{_DIAGNOSIS_FIELD_LABELS[name]} {F.text(before[name])} -> {F.text(after[name])}"
+        f"{_DIAGNOSIS_FIELD_LABELS[name]} {_diagnosis_value_text(name, before[name])} -> "
+        f"{_diagnosis_value_text(name, after[name])}"
         for name in after
         if before[name] != after[name]
     ]
-    F.echo(f"Diagnosis of {F.patient_text(patient)}: {_diagnosis_text(patient)}.")
-    F.echo(("Changed: " + "; ".join(changes) + ".") if changes else "No recorded value changed.")
+    F.say(f"Diagnosis of {F.patient_text(patient)}: {_diagnosis_text(patient)}.")
+    F.say(("Changed: " + "; ".join(changes) + ".") if changes else "No recorded value changed.")
     echo_outcome(result, user)
 
 
@@ -600,7 +645,7 @@ def set_diagnosis_command(
 @click.option("--dose", metavar="TEXT", help='Dose, e.g. "80 mg twice daily".')
 @click.option("--start", "start_date", type=DATE, help="Start date, YYYY-MM-DD.")
 def add_medication_command(
-    mrn: str, as_user: str, drug_name: str, drug_class: str, dose: str | None, start_date: datetime | None
+    mrn: str, as_user: str, drug_name: str, drug_class: str, dose: str | None, start_date: date | None
 ) -> None:
     """Record a current diabetes medication and re-evaluate the patient's decision support.
 
@@ -616,10 +661,10 @@ def add_medication_command(
     therapy = C.suggest_drug_class(drug_name) if suggested else drug_class.lower()
     with F.saving("Could not add the medication"):
         medication, result = patient_records.add_medication(
-            patient, drug_name=drug_name, drug_class=therapy, dose=dose, start_date=_date(start_date), user=user
+            patient, drug_name=drug_name, drug_class=therapy, dose=dose, start_date=start_date, user=user
         )
     how = " (suggested from the drug name; override with --class)" if suggested else ""
-    F.echo(
+    F.say(
         f"Added {medication.drug_name} to {F.patient_text(patient)} as "
         f"{C.DRUG_CLASS_LABELS[medication.drug_class]}{how}."
     )
@@ -657,7 +702,7 @@ def _matching_medications(patient: Patient, drug_name: str) -> list[Medication]:
     help="Name of the current medication (case-insensitive; a unique part of the name is enough).",
 )
 @click.option("--end", "end_date", type=DATE, help="Last day of the medication, YYYY-MM-DD (default: today, UTC).")
-def stop_medication_command(mrn: str, as_user: str, drug_name: str, end_date: datetime | None) -> None:
+def stop_medication_command(mrn: str, as_user: str, drug_name: str, end_date: date | None) -> None:
     """Stop a current medication and re-evaluate the patient's decision support.
 
     \b
@@ -671,9 +716,9 @@ def stop_medication_command(mrn: str, as_user: str, drug_name: str, end_date: da
     results: list[ReconcileResult] = []
     with F.saving("Could not stop the medication"):
         for medication in medications:
-            results.append(patient_records.stop_medication(medication, end_date=_date(end_date), user=user))
+            results.append(patient_records.stop_medication(medication, end_date=end_date, user=user))
     for medication in medications:
-        F.echo(f"Stopped {medication.drug_name} for {F.patient_text(patient)} (last day {F.day(medication.end_date)}).")
+        F.say(f"Stopped {medication.drug_name} for {F.patient_text(patient)} (last day {F.day(medication.end_date)}).")
     echo_outcome(_merged(results), user)
 
 
@@ -719,16 +764,16 @@ def _accepted_detail(upload: GenomicUpload) -> dict[str, Any]:
 def _echo_accepted(upload: GenomicUpload, patient: Patient) -> None:
     detail = _accepted_detail(upload)
     sample = f", sample {upload.sample_id}" if upload.sample_id else ""
-    F.echo(f"Accepted {upload.filename} for {F.patient_text(patient)} (upload #{upload.id}{sample}).")
+    F.say(f"Accepted {upload.filename} for {F.patient_text(patient)} (upload #{upload.id}{sample}).")
     new, updated = detail.get("new_variants"), detail.get("updated_variants")
-    variants = _plural(upload.panel_variants, "panel variant")
+    variants = F.plural(upload.panel_variants, "panel variant")
     if new is not None and updated is not None:
         variants += f" ({new} new, {updated} already recorded)"
-    F.field("Records", f"{_plural(upload.total_records, 'record')} in the file; {variants}", label_width=8)
+    F.field("Records", f"{F.plural(upload.total_records, 'record')} in the file; {variants}", label_width=8)
     F.field(
         "Skipped",
         f"{upload.off_panel_skipped} off-panel, {upload.non_pass_skipped} non-PASS, "
-        f"{_plural(upload.ref_calls_skipped, 'reference call')}",
+        f"{F.plural(upload.ref_calls_skipped, 'reference call')}",
         label_width=8,
     )
     for warning in detail.get("warnings") or []:
@@ -743,7 +788,7 @@ def upload_vcf_command(mrn: str, path: str, as_user: str) -> None:
     """Upload a patient VCF (GRCh38, plain or gzipped) and re-evaluate the patient.
 
     A rejected file prints the line-numbered reason and exits with status 1; the rejected
-    upload is kept for the audit trail and nothing else is stored (S10).
+    upload is kept for the audit trail and nothing else is stored.
 
     \b
     Examples:
@@ -753,6 +798,14 @@ def upload_vcf_command(mrn: str, path: str, as_user: str) -> None:
     user = F.acting_user(as_user, action="upload VCFs")
     patient = F.find_patient(mrn)
     file_path = Path(path)
+    limit = current_app.config.get("MAX_CONTENT_LENGTH")
+    if limit and file_path.stat().st_size > limit:
+        # Like the web upload (HTTP 413): far too large to read; nothing is stored.
+        raise click.ClickException(
+            f"{file_path.name} is {file_path.stat().st_size / (1024 * 1024):,.0f} MB; patient VCFs may be at most "
+            f"{current_app.config['PATIENT_VCF_MAX_BYTES'] / (1024 * 1024):.0f} MB. "
+            "Restrict the VCF to the gene panel (or compress it with bgzip) first."
+        )
     try:
         data = file_path.read_bytes()
     except OSError as exc:
@@ -784,49 +837,101 @@ def upload_vcf_command(mrn: str, path: str, as_user: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+_EVENT_ORDER = {"created": 0, "confirmed": 1, "reviewed": 2, "superseded": 3}
+_EVENT_VERBS = {"created": "+ new", "confirmed": "= confirmed", "reviewed": "* reviewed", "superseded": "- superseded"}
+
+
+def _moment_value(moment: datetime) -> str:
+    """The ``--at`` value selecting the state right after ``moment`` (rounded up to the millisecond)."""
+    return queries.ChangePoint(at=moment, label="", run_id=None, created=0, superseded=0).value.replace("T", " ")
+
+
+def _moment_label(events: Sequence[AlertEvent]) -> str:
+    """What happened at one moment and the evidence then in use.
+
+    The run's trigger (``ClinVar release R2 … (run #3)``), else the trigger of a created finding
+    or the reason of a supersession, followed by the release the findings rested on.
+    """
+    label = ""
+    for item in events:
+        run = item.run
+        if run is not None:
+            label = C.TRIGGER_LABELS.get(run.trigger, run.trigger)
+            if run.trigger == "clinvar_release" and run.new_release is not None:
+                return f"{label} {run.new_release.label} (run #{run.id})"
+            label += f" (run #{run.id})"
+            break
+    if not label:
+        created = [item for item in events if item.event == "created"]
+        superseded = [item for item in events if item.event == "superseded"]
+        if created:
+            label = C.TRIGGER_LABELS.get(created[0].alert.trigger, created[0].alert.trigger)
+        elif superseded:
+            reason = superseded[0].alert.superseded_reason or ""
+            label = C.SUPERSEDED_REASON_LABELS.get(reason, reason) or "Re-evaluation"
+        else:
+            return "Clinician review"
+    releases = {item.release.label for item in events if item.release is not None and item.event != "reviewed"}
+    return label + (f"; evidence: {', '.join(sorted(releases))}" if releases else "")
+
+
+def _event_row(item: AlertEvent) -> list[str]:
+    """``+ new alert | #23 | D2 v1 | HIGH | HNF1A 12-120994300-C-T (LP) | Reclassified``."""
+    alert = item.alert
+    rule = item.rule_version.label if item.rule_version is not None else alert.rule_code
+    cls = item.classification or alert.classification
+    extra = " "  # an empty last cell (a space is trimmed; None would print "-")
+    if item.event == "created" and alert.is_reclassified:
+        extra = F.flag("Reclassified")
+    elif item.event == "confirmed":
+        extra = "provenance updated"
+    elif item.event == "superseded":
+        reason = alert.superseded_reason or ""
+        extra = C.SUPERSEDED_REASON_LABELS.get(reason, reason).lower()
+    elif item.event == "reviewed" and item.user is not None:
+        extra = f"by {item.user.username}"
+    return [
+        f"{_EVENT_VERBS.get(item.event, item.event)} {alert.kind}",
+        f"#{alert.id}",
+        rule,
+        F.severity_label(alert.severity),
+        f"{F.variant_text(alert.variant_key)} ({F.class_label(cls)})",
+        extra,
+    ]
+
+
 def _echo_timeline(patient: Patient) -> None:
+    """Every provenance event of the patient's alerts and notes, grouped by moment, newest first."""
     view = queries.recommendations_view(patient)
-    F.echo(F.style(f"Recommendation history of {F.patient_text(patient)}", bold=True))
-    F.heading("Change points (newest first; pass one to --at to see the state right after it)")
-    if not view.change_points:
-        F.echo("  None: no alert or note has been raised for this patient.")
-    else:
-        F.table(
-            ["AT (UTC)", "CHANGE", "NEW", "SUPERSEDED", "RUN"],
-            (
-                (
-                    point.value.replace("T", " "),
-                    point.label,
-                    point.created,
-                    point.superseded,
-                    f"#{point.run_id}" if point.run_id is not None else None,
-                )
-                for point in view.change_points
-            ),
-        )
     current = [finding.alert for _severity, findings in view.groups for finding in findings]
     current += [finding.alert for finding in view.notes]
-    findings = sorted([*current, *view.history], key=lambda alert: (alert.superseded_at or alert.created_at, alert.id), reverse=True)
-    F.heading(f"All alerts and notes ({len(findings)}; current ones have no superseded time)")
-    if findings:
-        F.table(
-            ["ID", "RULE", "SEV", "VARIANT", "CLASS", "CREATED (UTC)", "SUPERSEDED (UTC)", "REASON"],
-            (
-                (
-                    alert.id,
-                    alert.created_rule_version.label if alert.created_rule_version is not None else alert.rule_code,
-                    F.severity_label(alert.severity),
-                    alert.variant_key.label,
-                    F.class_label(alert.classification),
-                    alert.created_at.strftime("%Y-%m-%d %H:%M"),
-                    alert.superseded_at.strftime("%Y-%m-%d %H:%M") if alert.superseded_at else None,
-                    alert.superseded_reason,
-                )
-                for alert in findings
-            ),
-            flex=7,
-        )
-    F.echo(f"\nState at a point in time: flask patients history {patient.mrn} --at 'YYYY-MM-DD HH:MM'")
+    F.echo(F.style(f"Recommendation history of {F.patient_text(patient)}", bold=True))
+    F.paragraph(
+        f"{F.plural(len(current), 'current finding')}, {F.plural(len(view.history), 'superseded finding')}. "
+        "Alerts are never deleted; every change is listed with the evidence behind it (newest first)."
+    )
+    moments: dict[datetime, list[AlertEvent]] = {}
+    for alert in [*current, *view.history]:
+        for item in alert.events:
+            moments.setdefault(item.at, []).append(item)
+    if not moments:
+        F.echo("")
+        F.echo("  No alert or note has been raised for this patient.")
+        return
+    ordered = [
+        (moment, sorted(moments[moment], key=lambda item: (_EVENT_ORDER.get(item.event, 9), item.alert_id)))
+        for moment in sorted(moments, reverse=True)
+    ]
+    # One table for all moments, so the columns line up across the whole timeline.
+    lines = iter(F.table_lines(None, [_event_row(item) for _moment, events in ordered for item in events], flex=4))
+    for moment, events in ordered:
+        F.echo("")
+        F.echo(F.style(f"{_moment_value(moment)} UTC", bold=True) + f"  {_moment_label(events)}")
+        for _item in events:
+            F.echo(next(lines))
+    F.echo("")
+    F.echo("State right after a change: pass its time to --at, e.g.")
+    F.echo(f'  flask patients history {patient.mrn} --at "{_moment_value(ordered[0][0])}"')
 
 
 def _echo_as_of(patient: Patient, at: datetime) -> None:
@@ -837,7 +942,7 @@ def _echo_as_of(patient: Patient, at: datetime) -> None:
     if not view.groups and not view.notes:
         F.echo("  No alerts or notes were current at that time.")
     else:
-        _echo_findings(view.groups, view.notes)
+        _echo_findings(view.groups, view.notes, as_of=True)
 
 
 def _point_in_time(_ctx: click.Context, _param: click.Parameter, value: str | None) -> datetime | None:
@@ -847,23 +952,24 @@ def _point_in_time(_ctx: click.Context, _param: click.Parameter, value: str | No
         return queries.parse_point_in_time(value)
     except ValueError:
         raise click.BadParameter(
-            f"{value!r} is not a date and time; use 'YYYY-MM-DD HH:MM' (UTC), e.g. '2026-01-15 09:30'."
+            f'{value!r} is not a date and time; use "YYYY-MM-DD HH:MM" (UTC), e.g. "2026-01-15 09:30".'
         ) from None
 
 
 @patients_cli.command("history")
 @click.argument("mrn")
 @click.option(
-    "--at", "at", metavar="'YYYY-MM-DD HH:MM'", callback=_point_in_time,
+    "--at", "at", metavar='"YYYY-MM-DD HH:MM"', callback=_point_in_time,
     help="Show the alerts and notes current at this time (UTC; seconds and milliseconds allowed).",
 )
 @as_option(required=False, help_text="View as this account (must be a clinician or administrator).")
 def history_command(mrn: str, at: datetime | None, as_user: str | None) -> None:
     """Show the recommendation history of a patient, or its state at a point in time (--at).
 
-    Without --at: the moments at which findings changed and every alert and note, current or
-    superseded. With --at: what the system recommended then and on what evidence (release, rule
-    version, classification at that time).
+    Without --at: a timeline, newest first, of every change to the patient's alerts and notes
+    (created, confirmed under a new release, reviewed, superseded) with its trigger and evidence.
+    With --at: what the system recommended at that time and on what evidence (release, rule
+    version and classification then) — reproducible because alerts are never deleted.
 
     \b
     Examples:
@@ -931,11 +1037,7 @@ def fhir_command(mrn: str, output: str | None, force: bool, as_user: str | None)
     if target is None:
         click.echo(payload, nl=False)
     else:
-        F.echo(f"Wrote the validated FHIR R4 Bundle of {patient.mrn} ({_plural(resources, 'resource')}) to {output}.")
-
-
-def _patients_with(values: Iterable[str]) -> list[str]:  # pragma: no cover - kept for symmetry
-    return sorted(values)
+        F.say(f"Wrote the validated FHIR R4 Bundle of {patient.mrn} ({F.plural(resources, 'resource')}) to {output}.")
 
 
 def register(app: Flask) -> None:
