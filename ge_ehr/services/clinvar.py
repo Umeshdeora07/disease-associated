@@ -52,7 +52,6 @@ from .classification import (
     normalize_clinvar_significance,
     review_stars,
 )
-
 from .vcf_backend import SitesVcfReader, VcfReadError, cyvcf2, vcf_backend
 from .vcf_parser import BGZF_EOF, GRCH37_NAME, GZIP_MAGIC, is_truncated_bgzf
 
@@ -248,10 +247,15 @@ def _check_not_truncated(path: Path) -> None:
 
 
 def _open_binary_text(path: Path) -> IO[str]:
-    """Open a plain or gzip/bgzip file as UTF-8 text (undecodable bytes are replaced)."""
+    """Open a plain or gzip/bgzip file as UTF-8 text (undecodable bytes are replaced).
+
+    Closing the stream closes the file (a ``GzipFile`` given a ``fileobj`` would leave it open,
+    and Windows cannot delete an open file).
+    """
     raw = path.open("rb")
     if raw.peek(2)[:2] == GZIP_MAGIC:
-        return io.TextIOWrapper(gzip.GzipFile(fileobj=raw), encoding="utf-8", errors="replace")
+        raw.close()
+        return gzip.open(path, "rt", encoding="utf-8", errors="replace")
     return io.TextIOWrapper(raw, encoding="utf-8", errors="replace")
 
 

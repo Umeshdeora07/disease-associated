@@ -345,6 +345,10 @@ def make_alert(
             rule_version=rule_version,
             classification=alert.classification,
             at=alert.created_at,
+            title=alert.title,
+            message=alert.message,
+            source=alert.source,
+            severity=alert.severity,
         )
     )
     db.session.flush()

@@ -120,7 +120,7 @@ def test_gzip_and_bgzip_input_parse_like_plain_text(tmp_path: Path) -> None:
 
 
 def test_crlf_line_endings_bom_and_trailing_whitespace_are_accepted() -> None:
-    text = GRCH38_FIXTURE.read_text().replace("\n", " \t\r\n")
+    text = GRCH38_FIXTURE.read_text(encoding="utf-8").replace("\n", " \t\r\n")
     assert_fixture_parsed(parse_patient_vcf(("﻿" + text).encode()))
 
 

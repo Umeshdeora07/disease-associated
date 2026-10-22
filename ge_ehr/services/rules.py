@@ -27,7 +27,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
-from ..constants import CLASS_LABELS, CLASSES, DRUG_CLASSES, GENES, MECHANISMS, RULE_KINDS, SEVERITIES
+from ..constants import CLASS_LABELS, CLASSES, DRUG_CLASSES, GENES, MECHANISMS, RULE_KINDS, SEVERITIES, ZYGOSITIES
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +53,7 @@ RULE_REQUIRED_FIELDS: tuple[str, ...] = (
 )
 RULE_OPTIONAL_FIELDS: tuple[str, ...] = ("change_note",)
 RULE_FIELDS: tuple[str, ...] = RULE_REQUIRED_FIELDS + RULE_OPTIONAL_FIELDS
-GENETIC_FIELDS: tuple[str, ...] = ("genes", "classes", "mechanism")
+GENETIC_FIELDS: tuple[str, ...] = ("genes", "classes", "mechanism", "zygosity")
 
 ANY_OF_DRUG_CLASSES = "any_of_drug_classes"
 NONE_OF_DRUG_CLASSES = "none_of_drug_classes"
@@ -84,7 +84,8 @@ class RuleSpec:
 
     ``clinical`` is the normalised clinical condition: a read-only mapping holding only the
     conditions that apply (drug-class lists as tuples in :data:`~ge_ehr.constants.DRUG_CLASSES`
-    order), or None when the rule has no therapy condition.
+    order), or None when the rule has no therapy condition. ``zygosity`` restricts the rule to
+    carriers with one of these zygosities (None: any zygosity).
     """
 
     rule_version_id: int | None
@@ -99,6 +100,7 @@ class RuleSpec:
     severity: str
     recommendation: str
     source: str
+    zygosity: frozenset[str] | None = None
 
     @property
     def label(self) -> str:
@@ -284,7 +286,9 @@ def _normalize_clinical(value: Any, context: str) -> Mapping[str, Any] | None:
     return MappingProxyType(conditions) if conditions else None
 
 
-def _parse_genetic(value: Any, context: str) -> tuple[frozenset[str], frozenset[str], str | None]:
+def _parse_genetic(
+    value: Any, context: str
+) -> tuple[frozenset[str], frozenset[str], str | None, frozenset[str] | None]:
     if not isinstance(value, Mapping):
         raise _fail(context, f"'genetic' must be an object, got {_type_name(value)} {value!r}.")
     _check_fields(value, GENETIC_FIELDS, context, "'genetic'")
@@ -296,7 +300,12 @@ def _parse_genetic(value: Any, context: str) -> tuple[frozenset[str], frozenset[
     mechanism = value.get("mechanism")
     if mechanism is not None and (not isinstance(mechanism, str) or mechanism not in MECHANISMS):
         raise _fail(context, f"'genetic.mechanism' must be null or one of {', '.join(MECHANISMS)}; got {mechanism!r}.")
-    return frozenset(genes), frozenset(classes), mechanism
+    zygosity = value.get("zygosity")
+    if zygosity is not None:
+        zygosity = frozenset(
+            _subset_list(zygosity, ZYGOSITIES, "genetic.zygosity", ("zygosity", "zygosities"), context, nullable=True)
+        )
+    return frozenset(genes), frozenset(classes), mechanism, zygosity
 
 
 def _parse_rule(defn: Any, *, position: int | None, rule_version_id: int | None) -> RuleSpec:
@@ -325,7 +334,7 @@ def _parse_rule(defn: Any, *, position: int | None, rule_version_id: int | None)
 
     kind = _choice(defn["kind"], RULE_KINDS, "kind", context)
     title = _required_text(defn, "title", context, MAX_TITLE_LENGTH)
-    genes, classes, mechanism = _parse_genetic(defn["genetic"], context)
+    genes, classes, mechanism, zygosity = _parse_genetic(defn["genetic"], context)
     clinical = _normalize_clinical(defn["clinical"], context)
     severity = _choice(defn["severity"], SEVERITIES, "severity", context)
     recommendation = _required_text(defn, "recommendation", context)
@@ -347,6 +356,7 @@ def _parse_rule(defn: Any, *, position: int | None, rule_version_id: int | None)
         severity=severity,
         recommendation=recommendation,
         source=source,
+        zygosity=zygosity,
     )
 
 
@@ -538,8 +548,8 @@ def describe_clinical_condition(clinical: Mapping[str, Any] | None) -> str:
 def describe_genetic_criterion(rule: RuleSpec) -> str:
     """Short description of a rule's genetic criterion (used by the UI and CLI).
 
-    Examples: ``"HNF1A · P/LP"``, ``"KCNJ11 or ABCC8 · P/LP · activating"``,
-    ``"Any of the 7 panel genes · P/LP"``.
+    Examples: ``"HNF1A · P/LP · heterozygous"``, ``"KCNJ11 or ABCC8 · P/LP · activating"``,
+    ``"Any of the 7 panel genes · P/LP · heterozygous"``.
     """
     genes = [gene for gene in GENES if gene in rule.genes]
     if len(genes) == len(GENES):
@@ -551,6 +561,8 @@ def describe_genetic_criterion(rule: RuleSpec) -> str:
     parts = [gene_text, "/".join(cls for cls in CLASSES if cls in rule.classes)]
     if rule.mechanism is not None:
         parts.append(rule.mechanism)
+    if rule.zygosity is not None:
+        parts.append(_zygosity_text(rule.zygosity))
     return " · ".join(parts)
 
 
@@ -564,12 +576,24 @@ def rule_code_sort_key(code: str) -> tuple[int, str]:
     return (int(code[1:]), code) if RULE_CODE_PATTERN.fullmatch(code) else (sys.maxsize, code)
 
 
+def _zygosity_text(zygosities: Iterable[str]) -> str:
+    """``"heterozygous"``, ``"heterozygous or hemizygous"`` (in :data:`ZYGOSITIES` order)."""
+    selected = set(zygosities)
+    names = [zygosity for zygosity in ZYGOSITIES if zygosity in selected]
+    return names[0] if len(names) == 1 else f"{', '.join(names[:-1])} or {names[-1]}"
+
+
 def _matches_genetic(rule: RuleSpec, variant: ClassifiedVariant) -> bool:
+    """Gene, class and (when the rule names one) mechanism match; zygosity is checked separately."""
     return (
         variant.gene in rule.genes
         and variant.classification in rule.classes
         and (rule.mechanism is None or variant.mechanism == rule.mechanism)
     )
+
+
+def _zygosity_matches(rule: RuleSpec, variant: ClassifiedVariant) -> bool:
+    return rule.zygosity is None or variant.zygosity in rule.zygosity
 
 
 def _note_message(rule: RuleSpec, variant: ClassifiedVariant, reason: str) -> str:
@@ -582,16 +606,28 @@ def _note_message(rule: RuleSpec, variant: ClassifiedVariant, reason: str) -> st
     )
 
 
+def _zygosity_note_message(rule: RuleSpec, variant: ClassifiedVariant) -> str:
+    """Why a rule whose gene/class/mechanism criterion is met does not apply to this genotype."""
+    return (
+        f"Rule {rule.code} applies to {_zygosity_text(rule.zygosity or ())} carriers; this {variant.gene} "
+        f"{CLASS_LABELS[variant.classification].lower()} variant is {variant.zygosity} — possible "
+        "recessive/biallelic form, refer to a specialist. No alert raised."
+    )
+
+
 def evaluate(
     variants: Iterable[ClassifiedVariant], ctx: ClinicalContext, rules: Iterable[RuleSpec]
 ) -> list[Finding]:
     """Algorithm 1: alert and note findings in deterministic (rule code, variant) order.
 
     For each rule and each variant whose gene, class and (when the rule names one) mechanism
-    meet the rule's genetic criterion: if the rule has no clinical condition or it holds, an
-    **alert** finding (rule severity, recommendation, source); otherwise a **note** finding
-    (severity None) whose message explains which clinical condition failed. Rules are ordered
-    by natural code order, variants by ``variant_key_id``.
+    meet the rule's genetic criterion: if the rule restricts zygosity and the variant's is not
+    listed (e.g. a homozygous variant for a rule of heterozygous carriers), a **note** finding
+    explaining that the rule does not apply to this genotype (possible recessive/biallelic form);
+    otherwise, if the rule has no clinical condition or it holds, an **alert** finding (rule
+    severity, recommendation, source), else a **note** finding (severity None) whose message
+    explains which clinical condition failed. Rules are ordered by natural code order, variants
+    by ``variant_key_id``.
 
     Raises :class:`RuleDefinitionError` when ``rules`` holds more than one version of a code and
     :class:`ValueError` when a variant key appears more than once — either would produce two
@@ -615,16 +651,21 @@ def evaluate(
             continue
         holds, reason = _condition_holds(rule.clinical, ctx)
         for variant in matching:
+            if not _zygosity_matches(rule, variant):
+                alert, message = False, _zygosity_note_message(rule, variant)
+            else:
+                alert = holds
+                message = rule.recommendation if holds else _note_message(rule, variant, reason)
             findings.append(
                 Finding(
                     rule_code=rule.code,
                     rule_version_id=rule.rule_version_id,
                     variant_key_id=variant.variant_key_id,
                     patient_variant_id=variant.patient_variant_id,
-                    kind="alert" if holds else "note",
-                    severity=rule.severity if holds else None,
+                    kind="alert" if alert else "note",
+                    severity=rule.severity if alert else None,
                     title=rule.title,
-                    message=rule.recommendation if holds else _note_message(rule, variant, reason),
+                    message=message,
                     source=rule.source,
                     classification=variant.classification,
                 )

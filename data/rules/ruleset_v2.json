@@ -10,7 +10,8 @@
       "genetic": {
         "genes": ["GCK"],
         "classes": ["P", "LP"],
-        "mechanism": null
+        "mechanism": null,
+        "zygosity": ["heterozygous"]
       },
       "clinical": {
         "any_of_drug_classes": ["insulin", "metformin", "sulfonylurea", "other"],
@@ -30,7 +31,8 @@
       "genetic": {
         "genes": ["HNF1A"],
         "classes": ["P", "LP"],
-        "mechanism": null
+        "mechanism": null,
+        "zygosity": ["heterozygous"]
       },
       "clinical": {
         "any_of_drug_classes": ["insulin", "metformin"],
@@ -50,7 +52,8 @@
       "genetic": {
         "genes": ["HNF4A"],
         "classes": ["P", "LP"],
-        "mechanism": null
+        "mechanism": null,
+        "zygosity": ["heterozygous"]
       },
       "clinical": {
         "any_of_drug_classes": ["insulin", "metformin"],
@@ -90,7 +93,8 @@
       "genetic": {
         "genes": ["GCK", "HNF1A", "HNF4A", "HNF1B", "KCNJ11", "ABCC8", "INS"],
         "classes": ["P", "LP"],
-        "mechanism": null
+        "mechanism": null,
+        "zygosity": ["heterozygous"]
       },
       "clinical": null,
       "severity": "low",

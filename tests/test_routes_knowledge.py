@@ -639,7 +639,7 @@ def test_import_rule_set_file_reevaluates_carriers(admin: FlaskClient, db: SQLAl
 
 
 def test_import_pasted_rule_set_identical_to_the_current_one(admin: FlaskClient, db: SQLAlchemy) -> None:
-    response = import_rules(admin, rules_json=RULESET_V1.read_text())
+    response = import_rules(admin, rules_json=RULESET_V1.read_text(encoding="utf-8"))
     run = db.session.scalar(select(ReevaluationRun).where(ReevaluationRun.trigger == "rule_revision"))
     assert response.status_code == 302 and run.changed_variants == 0 and not run.rule_change
     category, message = flashes(admin)[-1]
@@ -667,7 +667,7 @@ def test_invalid_json_is_reported_with_its_position(admin: FlaskClient, db: SQLA
 
 
 def test_invalid_rule_definition_is_reported_precisely(admin: FlaskClient, db: SQLAlchemy) -> None:
-    doc = json.loads(RULESET_V2.read_text())
+    doc = json.loads(RULESET_V2.read_text(encoding="utf-8"))
     del doc["rules"][1]["severity"]
     response = import_rules(admin, rules_file=(io.BytesIO(json.dumps(doc).encode()), "broken.json"))
     page = text(response)
@@ -677,7 +677,7 @@ def test_invalid_rule_definition_is_reported_precisely(admin: FlaskClient, db: S
 
 
 def test_changed_definition_of_a_stored_version_is_refused(admin: FlaskClient, db: SQLAlchemy) -> None:
-    doc = json.loads(RULESET_V1.read_text())
+    doc = json.loads(RULESET_V1.read_text(encoding="utf-8"))
     doc["rules"][0]["recommendation"] = "Something else entirely."
     response = import_rules(admin, rules_json=json.dumps(doc))
     assert response.status_code == 400
@@ -774,7 +774,7 @@ def test_knowledge_posts_require_a_csrf_token(csrf_admin: FlaskClient) -> None:
     assert csrf_admin.post("/knowledge/recompute").status_code == 400
     response = csrf_admin.post(
         "/knowledge/rules/import",
-        data={"rules_json": RULESET_V2.read_text(), "strategy": "change_driven", "submit": "Import"},
+        data={"rules_json": RULESET_V2.read_text(encoding="utf-8"), "strategy": "change_driven", "submit": "Import"},
     )
     assert response.status_code == 400
     assert _db.session.scalar(select(func.count(ReevaluationRun.id))) == 1
@@ -786,7 +786,7 @@ def test_knowledge_forms_work_with_their_csrf_token(csrf_admin: FlaskClient) -> 
     token = csrf_token(csrf_admin.get("/knowledge/rules/import"))
     response = csrf_admin.post(
         "/knowledge/rules/import",
-        data={"csrf_token": token, "rules_json": RULESET_V2.read_text(), "strategy": "change_driven", "submit": "Import"},
+        data={"csrf_token": token, "rules_json": RULESET_V2.read_text(encoding="utf-8"), "strategy": "change_driven", "submit": "Import"},
     )
     assert response.status_code == 302
     assert {version.code: version.version for version in RuleVersion.current_versions()}["D4"] == 2

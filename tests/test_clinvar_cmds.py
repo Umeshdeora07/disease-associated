@@ -157,7 +157,7 @@ def test_import_of_a_duplicate_file_fails_cleanly(runner: FlaskCliRunner, db: SQ
 
 def test_import_with_an_invalid_overlay_rolls_back(runner: FlaskCliRunner, db: SQLAlchemy, tmp_path: Path) -> None:
     overlay = tmp_path / "panel.csv"
-    overlay.write_text("clinvar_variation_id,classification,panel,date\n9100004,Pathogenicish,VCEP,\n")
+    overlay.write_text("clinvar_variation_id,classification,panel,date\n9100004,Pathogenicish,VCEP,\n", encoding="utf-8")
     result = runner.invoke(args=["clinvar", "import", str(FORMAT_FIXTURE), "--expert-panel", str(overlay)])
     assert result.exit_code == 1
     assert "Error: Expert-panel overlay panel.csv, line 2: unknown classification 'Pathogenicish'" in result.output
@@ -166,7 +166,7 @@ def test_import_with_an_invalid_overlay_rolls_back(runner: FlaskCliRunner, db: S
 
 def test_import_of_an_invalid_file(runner: FlaskCliRunner, db: SQLAlchemy, tmp_path: Path) -> None:
     path = tmp_path / "grch37.vcf"
-    path.write_text("##fileformat=VCFv4.1\n##reference=GRCh37\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n")
+    path.write_text("##fileformat=VCFv4.1\n##reference=GRCh37\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n", encoding="utf-8")
     result = runner.invoke(args=["clinvar", "import", str(path)])
     assert result.exit_code == 1 and "is a GRCh37 file" in result.output
     assert releases(db) == []

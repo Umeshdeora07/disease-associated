@@ -492,6 +492,18 @@ def test_ingest_vcf_classifies_mechanism_for_d4(db: SQLAlchemy, release: KbRelea
     assert {(alert.rule_code, alert.kind) for alert in result.created} == {("D4", "alert"), ("D5", "alert")}
 
 
+def test_ingest_homozygous_gck_in_a_neonate_raises_notes_not_dominant_advice(db: SQLAlchemy, release: KbRelease) -> None:
+    """Finding F3: biallelic GCK loss needs insulin; D1/D5 advice for heterozygous carriers must not fire."""
+    patient = new_patient(birth_date=date(2026, 3, 1), diabetes_type="neonatal", age_at_diagnosis_months=1)
+    pr.add_medication(patient, drug_name="Insulin", drug_class="insulin")
+    _, result = pr.ingest_vcf(patient, vcf_bytes([(GCK_P, "1/1")]), "hom.vcf")
+    (variant,) = patient.variants
+    assert (variant.zygosity, variant.current_classification) == ("homozygous", "P")
+    assert current_findings(patient) == {("D1", "note", None), ("D5", "note", None)}
+    assert all(alert.notify is False for alert in result.created)
+    assert all("this GCK pathogenic variant is homozygous" in alert.message for alert in result.created)
+
+
 def test_ingest_vcf_without_current_release_stores_unclassified_variants(db: SQLAlchemy, rules_v1: None) -> None:
     make_release("Imported, not activated")
     patient = new_patient()

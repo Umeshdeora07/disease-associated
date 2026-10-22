@@ -2,10 +2,12 @@
 
 :func:`build_patient_bundle` turns a patient and their stored variants into a FHIR ``collection``
 Bundle: one Patient, one *variant* Observation per PatientVariant and, for every variant whose
-current classification is not ``NC``, one *diagnostic-implication* Observation derived from it.
-Both Observations are exported with status ``amended`` once a release activation has changed the
-variant's classification (paper §3, Table IV), so downstream systems can see that an earlier
-report was revised. The structure is a simplified subset of the HL7 Genomics Reporting IG 2.0.0
+current classification is not ``NC`` — or that is amended, even when it is now ``NC`` — one
+*diagnostic-implication* Observation derived from it. Both Observations are exported with status
+``amended`` once a release activation has changed the variant's classification or mechanism
+(paper §3, Table IV), so downstream systems can see that an earlier report was revised; an
+interpretation withdrawn because the variant is no longer listed keeps its Observation id and
+states "Not classified (no longer listed in <release>)" instead of being dropped. The structure is a simplified subset of the HL7 Genomics Reporting IG 2.0.0
 profiles; the codes come from :mod:`ge_ehr.constants` and the module constants below.
 
 :func:`validate_bundle` parses a bundle with the ``fhir.resources.R4B`` models. fhir.resources 8
@@ -101,7 +103,8 @@ def build_patient_bundle(patient: Patient, *, base_url: str | None = None) -> di
     """Build the JSON-ready FHIR collection Bundle for ``patient``.
 
     Entries: the Patient, then per PatientVariant (in id order) its variant Observation followed
-    by its diagnostic-implication Observation when the current class is not ``NC``. Provenance
+    by its diagnostic-implication Observation when the current class is not ``NC`` or the
+    variant is amended (an earlier export may have reported an interpretation). Provenance
     (hgvs, condition, review status, expert-panel flag) comes from the KnownVariant of each
     variant's ``classification_release``. ``base_url`` is the server root (e.g.
     ``https://ge-ehr.example.org/``); when given, the bundle carries a ``self`` link to its
@@ -117,7 +120,7 @@ def build_patient_bundle(patient: Patient, *, base_url: str | None = None) -> di
         known_variant = known.get((variant.classification_release_id, variant.variant_key_id))
         observation = _variant_observation(patient, variant, known_variant, subject)
         resources.append(observation)
-        if variant.current_classification != "NC":
+        if variant.current_classification != "NC" or variant.is_amended:
             resources.append(_implication_observation(patient, variant, known_variant, subject, observation))
 
     bundle: dict[str, Any] = {
@@ -299,12 +302,10 @@ def _implication_observation(
     """Diagnostic-implication Observation: clinical significance, phenotype and provenance note.
 
     ``effectiveDateTime`` and ``issued`` are the time the current classification was assigned.
+    A variant that is now not classified (only exported once amended) states that as text.
     """
     components: list[FhirResource] = [
-        _component(
-            CLINICAL_SIGNIFICANCE,
-            valueCodeableConcept=_loinc_concept(C.CLASS_TO_LOINC[variant.current_classification]),
-        )
+        _component(CLINICAL_SIGNIFICANCE, valueCodeableConcept=_significance_concept(variant, known))
     ]
     condition = (known.condition or "").strip() if known is not None else ""
     if condition and condition.lower() not in _UNSTATED_CONDITIONS:
@@ -324,6 +325,19 @@ def _implication_observation(
         "component": components,
         "note": [{"text": _provenance_note(variant, known)}],
     }
+
+
+def _significance_concept(variant: PatientVariant, known: KnownVariant | None) -> dict[str, Any]:
+    """The clinical-significance answer: a LOINC code, or text for a variant that is not classified."""
+    code = C.CLASS_TO_LOINC.get(variant.current_classification)
+    if code is not None:
+        return _loinc_concept(code)
+    release = variant.classification_release
+    label = release.label if release is not None else "the current knowledge-base release"
+    if known is None:
+        return {"text": f"Not classified (no longer listed in {label})"}
+    significance = (known.clinvar_significance or "no classification").replace("_", " ")
+    return {"text": f"Not classified ({significance} in {label})"}
 
 
 def _provenance_note(variant: PatientVariant, known: KnownVariant | None) -> str:

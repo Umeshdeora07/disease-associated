@@ -675,10 +675,15 @@ class Alert(Model):
 
 
 class AlertEvent(Model):
-    """Provenance event of an alert (created / confirmed / reviewed / superseded)."""
+    """Provenance event of an alert (created / confirmed / reviewed / superseded).
+
+    ``created`` and ``confirmed`` events snapshot the finding's ``title``, ``message``, ``source``
+    and ``severity`` as they stood from that moment on, so the point-in-time view shows the text
+    of the time even after a later confirmation rewrote the alert's text (SPEC §7.5).
+    """
 
     __tablename__ = "alert_events"
-    __table_args__ = (_one_of("event", C.ALERT_EVENTS),)
+    __table_args__ = (_one_of("event", C.ALERT_EVENTS), _one_of("severity", C.SEVERITIES, nullable=True))
 
     id: Mapped[int] = mapped_column(primary_key=True)
     alert_id: Mapped[int] = mapped_column(ForeignKey("alerts.id"), index=True)
@@ -690,6 +695,10 @@ class AlertEvent(Model):
     user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
     at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     detail: Mapped[str | None] = mapped_column(Text)
+    title: Mapped[str | None] = mapped_column(String(255))
+    message: Mapped[str | None] = mapped_column(Text)
+    source: Mapped[str | None] = mapped_column(Text)
+    severity: Mapped[str | None] = mapped_column(String(8))
 
     alert: Mapped[Alert] = relationship(back_populates="events")
     release: Mapped[KbRelease | None] = relationship()

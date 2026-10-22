@@ -48,6 +48,9 @@ TABLE_III: dict[str, tuple[Any, ...]] = {
     ),
 }
 D4_RECOMMENDATION = "Refer to specialist to consider transfer to high-dose sulfonylurea."
+# Rules whose advice assumes autosomal dominant (heterozygous) disease; a homozygous carrier gets a
+# note instead (possible recessive/biallelic form). D4 (activating KATP) and D6 (VUS) apply to any.
+HETEROZYGOUS_ONLY = {"D1", "D2", "D3", "D5"}
 
 
 def _load(path: Any) -> dict[str, Any]:
@@ -83,7 +86,10 @@ def test_rules_match_table_iii(path: Any, code: str) -> None:
     rule = _by_code(_load(path))[code]
     assert rule["version"] == 1
     assert rule["kind"] == kind
-    assert rule["genetic"] == {"genes": genes, "classes": classes, "mechanism": mechanism}
+    expected_genetic = {"genes": genes, "classes": classes, "mechanism": mechanism}
+    if code in HETEROZYGOUS_ONLY:
+        expected_genetic["zygosity"] = ["heterozygous"]
+    assert rule["genetic"] == expected_genetic
     assert rule["clinical"] == clinical
     assert rule["severity"] == severity
     assert rule["recommendation"] == recommendation

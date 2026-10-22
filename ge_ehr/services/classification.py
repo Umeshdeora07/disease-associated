@@ -84,8 +84,11 @@ _CLASS_SPELLINGS: dict[str, str] = {
 }
 
 _KATP_CHANNEL_GENES = frozenset({"KCNJ11", "ABCC8"})
-_NEONATAL_DIABETES_PATTERN = re.compile(r"neonatal|diabetes", re.IGNORECASE)
-_DIABETES_PATTERN = re.compile(r"diabetes", re.IGNORECASE)
+# DEND / intermediate DEND syndrome (developmental delay, epilepsy and neonatal diabetes) is the
+# most severe activating KATP-channel phenotype; the acronym is matched as a whole word only.
+_DEND = r"(?<![a-z])i?dend(?![a-z])"
+_NEONATAL_DIABETES_PATTERN = re.compile(rf"neonatal|diabetes|{_DEND}", re.IGNORECASE)
+_DIABETES_PATTERN = re.compile(rf"diabetes|{_DEND}", re.IGNORECASE)
 _HYPERINSULINISM_PATTERN = re.compile(r"hyperinsulin|hypoglyc", re.IGNORECASE)
 _WHITESPACE = re.compile(r"\s+")
 _COMMA = re.compile(r"\s*,\s*")
@@ -152,10 +155,11 @@ def infer_mechanism(gene: str | None, condition: str | None) -> str:
     """Infer the variant mechanism from its condition (KCNJ11/ABCC8 only; other genes → ``unknown``).
 
     Activating KATP-channel variants cause neonatal diabetes and inactivating ones congenital
-    hyperinsulinism (SPEC §5.1): a condition text matching ``neonatal|diabetes`` without
+    hyperinsulinism (SPEC §5.1): a condition text matching ``neonatal|diabetes`` or the word
+    ``DEND`` / ``iDEND`` (developmental delay, epilepsy and neonatal diabetes) without
     ``hyperinsulin|hypoglyc`` → ``activating``; one matching ``hyperinsulin|hypoglyc`` without
-    ``diabetes`` → ``inactivating`` (so "Neonatal hypoglycemia" is inactivating); anything else,
-    e.g. a variant listed for both neonatal diabetes and hyperinsulinism → ``unknown``.
+    ``diabetes``/``DEND`` → ``inactivating`` (so "Neonatal hypoglycemia" is inactivating); anything
+    else, e.g. a variant listed for both neonatal diabetes and hyperinsulinism → ``unknown``.
     ``condition`` may be ClinVar's raw CLNDN (``_`` for spaces, ``|`` between conditions) or
     readable text; the whole text is searched either way.
     """

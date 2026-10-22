@@ -66,7 +66,8 @@ def instance_secret_key(instance_path: str | os.PathLike[str]) -> str:
                 )
             path.unlink(missing_ok=True)  # an empty file left by an interrupted first start
         try:
-            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            # O_BINARY (Windows only): no CRT newline translation, so the file is the same everywhere.
+            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o600)
         except FileExistsError:
             continue  # another process created it first: read its key
         key = secrets.token_hex(32)

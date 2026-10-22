@@ -1043,8 +1043,8 @@ def write_results(results: Mapping[str, Any], out: Path) -> tuple[Path, Path]:
     """Write ``results.json`` and ``RESULTS.md`` to ``out``; returns both paths."""
     out.mkdir(parents=True, exist_ok=True)
     json_path, markdown_path = out / "results.json", out / "RESULTS.md"
-    json_path.write_text(json.dumps(results, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    markdown_path.write_text(render_markdown(results), encoding="utf-8")
+    json_path.write_text(json.dumps(results, indent=2, ensure_ascii=False) + "\n", encoding="utf-8", newline="\n")
+    markdown_path.write_text(render_markdown(results), encoding="utf-8", newline="\n")
     return json_path, markdown_path
 
 

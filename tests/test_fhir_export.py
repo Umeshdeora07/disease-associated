@@ -414,6 +414,56 @@ def test_not_classified_variant_has_no_implication(bundle: dict[str, Any]) -> No
     assert len(with_profile(bundle, IMPLICATION_PROFILE)) == 2
 
 
+def test_reported_variant_removed_from_the_release_exports_an_amended_implication(
+    db: SQLAlchemy, record: Record
+) -> None:
+    """Finding F5: an interpretation exported earlier is amended, never silently dropped."""
+    before = build_patient_bundle(record.patient)
+    variant_then = variant_observation(before, "G", "A", 120978900)
+    implication_then = implication_for(before, variant_then)
+    assert component(implication_then, "53037-8")["valueCodeableConcept"] == loinc("LA6668-3", "Pathogenic")
+
+    # R2 no longer lists the variant (removed from ClinVar): P → NC.
+    record.pathogenic.current_classification = "NC"
+    record.pathogenic.classification_release = record.r2
+    record.pathogenic.reclassified_count = 1
+    record.pathogenic.last_reclassified_at = RECLASSIFIED
+    db.session.commit()
+    after = build_patient_bundle(record.patient)
+
+    variant_now = variant_observation(after, "G", "A", 120978900)
+    implication_now = implication_for(after, variant_now)
+    assert implication_now is not None and implication_now["id"] == implication_then["id"]
+    assert variant_now["status"] == implication_now["status"] == "amended"
+    assert component(implication_now, "53037-8")["valueCodeableConcept"] == {
+        "text": "Not classified (no longer listed in R2 (2026-01, synthetic))"
+    }
+    assert component(implication_now, "81259-4") is None
+    assert implication_now["note"] == [{"text": (
+        "Classified against R2 (2026-01, synthetic), review status not provided, expert panel no; "
+        "reclassified 1 time(s); first reported as Pathogenic."
+    )}]
+    assert implication_now["issued"] == fhir_instant(RECLASSIFIED)
+    validate_bundle(after)
+
+
+def test_amended_variant_listed_without_classification_states_the_significance(db: SQLAlchemy) -> None:
+    r1, r2 = make_release("R1"), make_release("R2", current=True)
+    add_known_variant(r1, "12", 120978900, "G", "A", "LP")
+    add_known_variant(r2, "12", 120978900, "G", "A", "NC", clinvar_significance="not_provided")
+    patient = make_patient()
+    variant = add_patient_variant(patient, "12", 120978900, "G", "A", classification="NC", release=r2)
+    variant.reported_classification, variant.reclassified_count = "LP", 1
+    db.session.commit()
+
+    result = build_patient_bundle(patient)
+
+    (implication,) = with_profile(result, IMPLICATION_PROFILE)
+    assert implication["status"] == "amended"
+    assert component(implication, "53037-8")["valueCodeableConcept"] == {"text": "Not classified (not provided in R2)"}
+    validate_bundle(result)
+
+
 @pytest.mark.parametrize("condition", [None, "", "not provided", "Not specified"])
 def test_phenotype_omitted_when_condition_unstated(db: SQLAlchemy, condition: str | None) -> None:
     release = make_release(current=True)

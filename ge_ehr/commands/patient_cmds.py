@@ -42,7 +42,7 @@ from ..models import Alert, AlertEvent, AuditLog, GenomicUpload, Medication, Pat
 from ..patients import queries
 from ..patients.routes import describe_outcome
 from ..security import audit
-from ..services import patient_records
+from ..services import patient_records, reevaluation
 from ..services.alerting import ReconcileResult
 from ..services.fhir_export import build_patient_bundle, validate_bundle
 from ..services.rules import rule_code_sort_key
@@ -151,13 +151,17 @@ def _now_text(alert: Alert) -> str:
     return f"still current ({alert.status})"
 
 
-def _echo_finding(finding: queries.FindingView, *, indent: int = 4, as_of: bool = False) -> None:
+def _echo_finding(finding: queries.FindingView, *, indent: int = 4, at: datetime | None = None) -> None:
     """One alert or note: header, variant, recommendation, source and evidence.
 
-    ``as_of``: the finding as it stood at a past point in time — its status today is added and
-    no review hint is offered.
+    ``at``: the finding as it stood at that past point in time — the title, text and source shown
+    then (not today's), its status today added, and no review hint offered.
     """
     alert = finding.alert
+    as_of = at is not None
+    snapshot = reevaluation.alert_snapshot_as_of(alert, at) if at is not None else None
+    shown = snapshot if snapshot is not None else alert
+    title, message, source = shown.title, shown.message, shown.source
     margin = " " * indent
     names = []
     if alert.is_reclassified:
@@ -165,13 +169,13 @@ def _echo_finding(finding: queries.FindingView, *, indent: int = 4, as_of: bool 
     if alert.priority == "high":
         names.append("High priority")
     markers = F.flags(names)
-    header = margin + "  ".join([f"#{alert.id}", finding.rule_label, F.status_label(finding.status), alert.title])
+    header = margin + "  ".join([f"#{alert.id}", finding.rule_label, F.status_label(finding.status), title])
     budget = F.WIDTH - (F.visible_length(markers) + 2 if markers else 0)
     F.echo(F.shorten(header, budget) + (f"  {markers}" if markers else ""))
     options = {"label_width": 14, "indent": indent + 4}
     F.field("Variant", f"{F.variant_text(alert.variant_key)} - {F.class_label(finding.classification, long=True)}", **options)
-    F.field("Recommendation" if alert.kind == "alert" else "Note", alert.message, **options)
-    F.field("Source", alert.source, **options)
+    F.field("Recommendation" if alert.kind == "alert" else "Note", message, **options)
+    F.field("Source", source, **options)
     F.field("Evidence", _evidence_text(finding), **options)
     if finding.status == "reviewed" and alert.reviewed_at is not None:
         who = alert.reviewed_by.username if alert.reviewed_by is not None else "unknown user"
@@ -187,7 +191,7 @@ def _echo_findings(
     groups: Sequence[tuple[str, Sequence[queries.FindingView]]],
     notes: Sequence[queries.FindingView],
     *,
-    as_of: bool = False,
+    at: datetime | None = None,
 ) -> None:
     if not groups and not notes:
         F.echo("  No alerts or notes.")
@@ -195,11 +199,11 @@ def _echo_findings(
     for severity, findings in groups:
         F.echo(f"  {F.severity_label(severity)} ({len(findings)})")
         for finding in findings:
-            _echo_finding(finding, as_of=as_of)
+            _echo_finding(finding, at=at)
     if notes:
         F.echo(f"  NOTES ({len(notes)}) - genetic criterion met, clinical condition not met: no alert raised")
         for finding in notes:
-            _echo_finding(finding, as_of=as_of)
+            _echo_finding(finding, at=at)
 
 
 # ---------------------------------------------------------------------------
@@ -942,7 +946,7 @@ def _echo_as_of(patient: Patient, at: datetime) -> None:
     if not view.groups and not view.notes:
         F.echo("  No alerts or notes were current at that time.")
     else:
-        _echo_findings(view.groups, view.notes, as_of=True)
+        _echo_findings(view.groups, view.notes, at=at)
 
 
 def _point_in_time(_ctx: click.Context, _param: click.Parameter, value: str | None) -> datetime | None:

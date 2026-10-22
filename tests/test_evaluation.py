@@ -262,7 +262,7 @@ def test_load_real_pair_needs_two_subsets(tmp_path: Path, base: list[ClinVarReco
     assert K.load_real_pair(tmp_path / "missing") is None
     assert K.load_real_pair(tmp_path) is None
     _write_subset(tmp_path, "2023-01-07", base[:50])
-    (tmp_path / "notes.txt").write_text("not a subset")
+    (tmp_path / "notes.txt").write_text("not a subset", encoding="utf-8")
     assert K.load_real_pair(tmp_path, allow_synthetic=True) is None
 
 
@@ -667,8 +667,8 @@ def test_results_record_environment_overrides_and_pending_real_pair(quick: dict[
 
 def test_write_results_renders_table_vi(tmp_path: Path, quick: dict[str, Any]) -> None:
     json_path, markdown_path = R.write_results(quick, tmp_path / "out")
-    assert json.loads(json_path.read_text())["options"] == quick["options"]
-    text = markdown_path.read_text()
+    assert json.loads(json_path.read_text(encoding="utf-8"))["options"] == quick["options"]
+    text = markdown_path.read_text(encoding="utf-8")
     expectations = quick["synthetic"]["table_vi_expectations"]
     assert "## Table VI — measured" in text
     assert f"Paper Table VI expectations met: **{len(expectations)} of {len(expectations)}**" in text

@@ -8,7 +8,14 @@ the desired findings, matching on ``Finding.key`` = (rule code, variant key, kin
 * desired but not current → new alert/note with full provenance (AlertEvent ``created``);
 * current but no longer desired → ``superseded`` (AlertEvent ``superseded``) — never deleted;
 * in both → provenance updated (AlertEvent ``confirmed``) when the release, the rule version or
-  the finding's text changed, otherwise unchanged. A reviewed alert stays reviewed.
+  the finding's text changed, otherwise unchanged. A reviewed alert stays reviewed. Exception: an
+  **alert** whose recommendation text changed (a rule revision rewrote it) is an outcome change —
+  it is superseded (reason ``rule_revised``) and replaced by a new alert that notifies, so a
+  clinician's review never silently carries over to advice it did not see. Notes follow the
+  patient's therapy/diagnosis, so their text is updated in place.
+
+``created`` and ``confirmed`` events snapshot the finding's title, message, source and severity,
+so the text shown at any earlier time stays reproducible (SPEC §7.5).
 
 The invariant "at most one current alert per (patient, rule code, variant key, kind)" holds
 because evaluation yields one finding per (rule code, variant) and replaced rows are superseded
@@ -58,6 +65,9 @@ class ReconcileResult:
     confirmed: list[Alert] = field(default_factory=list)
     unchanged: list[Alert] = field(default_factory=list)
     records_examined: int = 0
+    #: (old, new) pairs: alerts superseded because their rule's recommendation was revised and
+    #: their replacements. Each old alert is also in ``superseded``, each new one in ``created``.
+    revised: list[tuple[Alert, Alert]] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -131,8 +141,16 @@ class _Reconciler:
         self.now = now
 
     def _event(
-        self, alert: Alert, event: str, *, rule_version_id: int | None, variant_class: str | None, detail: str
+        self,
+        alert: Alert,
+        event: str,
+        *,
+        rule_version_id: int | None,
+        variant_class: str | None,
+        detail: str,
+        finding: Finding | None = None,
     ) -> None:
+        """Add a provenance event; ``finding`` (created/confirmed events) is snapshotted with it."""
         db.session.add(
             AlertEvent(
                 alert=alert,
@@ -144,11 +162,15 @@ class _Reconciler:
                 user=self.user,
                 at=self.now,
                 detail=detail,
+                title=finding.title if finding is not None else None,
+                message=finding.message if finding is not None else None,
+                source=finding.source if finding is not None else None,
+                severity=finding.severity if finding is not None else None,
             )
         )
 
-    def create(self, finding: Finding) -> Alert:
-        """Insert the alert or note for a newly desired finding."""
+    def create(self, finding: Finding, *, replaces: Alert | None = None) -> Alert:
+        """Insert the alert or note for a newly desired finding (``replaces``: the alert it revises)."""
         rule = self.rules[finding.rule_code]
         alert = Alert(
             patient=self.patient,
@@ -174,17 +196,25 @@ class _Reconciler:
             created_at=self.now,
         )
         db.session.add(alert)
+        detail = (
+            f"{'Alert' if finding.kind == 'alert' else 'Note'} created by {rule.label} under "
+            f"{_release_text(self.release)} (trigger: {C.TRIGGER_LABELS[self.trigger]})."
+        )
+        if replaces is not None:
+            detail += f" Replaces alert #{replaces.id}, whose recommendation {rule.label} revised."
         self._event(
             alert,
             "created",
             rule_version_id=finding.rule_version_id,
             variant_class=finding.classification,
-            detail=(
-                f"{'Alert' if finding.kind == 'alert' else 'Note'} created by {rule.label} under "
-                f"{_release_text(self.release)} (trigger: {C.TRIGGER_LABELS[self.trigger]})."
-            ),
+            detail=detail,
+            finding=finding,
         )
         return alert
+
+    def needs_replacement(self, alert: Alert, finding: Finding) -> bool:
+        """A still-firing alert whose recommendation text changed (a rule revision rewrote it)."""
+        return alert.kind == "alert" and alert.message != finding.message
 
     def confirm(self, alert: Alert, finding: Finding) -> bool:
         """Bring a still-desired alert's provenance (and text) up to date; False when nothing changed."""
@@ -211,10 +241,11 @@ class _Reconciler:
             rule_version_id=finding.rule_version_id,
             variant_class=finding.classification,
             detail=detail,
+            finding=finding,
         )
         return True
 
-    def supersede(self, alert: Alert, reason: str, variant_class: str | None) -> None:
+    def supersede(self, alert: Alert, reason: str, variant_class: str | None, *, detail: str | None = None) -> None:
         """Mark an alert that is no longer desired as superseded (it is never deleted)."""
         rule = self.rules.get(alert.rule_code)
         alert.status = "superseded"
@@ -226,7 +257,8 @@ class _Reconciler:
             "superseded",
             rule_version_id=rule.rule_version_id if rule is not None else alert.confirmed_rule_version_id,
             variant_class=variant_class,
-            detail=(
+            detail=detail
+            or (
                 f"{C.SUPERSEDED_REASON_LABELS[reason]}: no longer produced under {_release_text(self.release)} "
                 f"(trigger: {C.TRIGGER_LABELS[self.trigger]})."
             ),
@@ -255,7 +287,10 @@ def reconcile_patient(
     under ``release`` with :func:`~ge_ehr.services.classification.classified_variants_for_patient`.
     Created alerts get ``notify = (kind == "alert" and severity != "info")``, priority
     ``normal`` and ``is_reclassified=False`` (the re-evaluation engine adjusts these per change
-    category). ``records_examined`` is the number of classified variants evaluated.
+    category). A current alert whose recommendation text differs from its finding's is
+    superseded with reason ``rule_revised`` and replaced by a new alert (listed in
+    ``result.revised`` as well as in ``superseded`` / ``created``). ``records_examined`` is the
+    number of classified variants evaluated.
 
     Every rule in scope must be stored (``rule_version_id`` set). Raises :class:`ValueError` for
     an unknown ``trigger`` / ``superseded_reason`` or an unstored rule.
@@ -295,10 +330,13 @@ def reconcile_patient(
     result = ReconcileResult(records_examined=len(variants))
     current = {_alert_key(alert): alert for alert in _current_alerts(patient, key_scope, code_scope)}
     to_create: list[Finding] = []
+    to_replace: list[tuple[Alert, Finding]] = []
     for finding in findings:
         alert = current.pop(finding.key, None)
         if alert is None:
             to_create.append(finding)
+        elif reconciler.needs_replacement(alert, finding):
+            to_replace.append((alert, finding))
         elif reconciler.confirm(alert, finding):
             result.confirmed.append(alert)
         else:
@@ -308,19 +346,35 @@ def reconcile_patient(
     for alert in current.values():
         reconciler.supersede(alert, superseded_reason, classification_by_key.get(alert.variant_key_id))
         result.superseded.append(alert)
-    if result.superseded and to_create:
-        # A replacement (e.g. same rule and variant, new severity) may share the partial unique
-        # index key of a row superseded above, so that row must reach the database first.
+    for alert, finding in to_replace:
+        rule = reconciler.rules[finding.rule_code]
+        reconciler.supersede(
+            alert,
+            "rule_revised",
+            finding.classification,
+            detail=f"{C.SUPERSEDED_REASON_LABELS['rule_revised']}: {rule.label} revised the recommendation; "
+            "replaced by a new alert.",
+        )
+        result.superseded.append(alert)
+    if result.superseded and (to_create or to_replace):
+        # A replacement (e.g. same rule and variant, new severity or text) may share the partial
+        # unique index key of a row superseded above, so that row must reach the database first.
         db.session.flush()
     result.created.extend(reconciler.create(finding) for finding in to_create)
+    for alert, finding in to_replace:
+        replacement = reconciler.create(finding, replaces=alert)
+        result.created.append(replacement)
+        result.revised.append((alert, replacement))
     db.session.flush()
 
     logger.debug(
-        "Reconciled patient %s (%s): %d created, %d superseded, %d confirmed, %d unchanged, %d records examined",
+        "Reconciled patient %s (%s): %d created, %d superseded (%d revised), %d confirmed, %d unchanged, "
+        "%d records examined",
         patient.id,
         trigger,
         len(result.created),
         len(result.superseded),
+        len(result.revised),
         len(result.confirmed),
         len(result.unchanged),
         result.records_examined,

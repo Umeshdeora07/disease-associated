@@ -524,15 +524,15 @@ def test_static_assets_are_served(client: FlaskClient, path: str, mimetype: str)
 
 def test_vendored_versions_and_licenses() -> None:
     vendor = STATIC_ROOT / "vendor"
-    assert "Bootstrap  v5.3.3" in (vendor / "bootstrap/css/bootstrap.min.css").read_text()[:200]
-    assert "Bootstrap v5.3.3" in (vendor / "bootstrap/js/bootstrap.bundle.min.js").read_text()[:200]
-    assert "Bootstrap Icons v1.11.3" in (vendor / "bootstrap-icons/bootstrap-icons.min.css").read_text()[:200]
-    assert 'url("fonts/bootstrap-icons.woff2' in (vendor / "bootstrap-icons/bootstrap-icons.min.css").read_text()
+    assert "Bootstrap  v5.3.3" in (vendor / "bootstrap/css/bootstrap.min.css").read_text(encoding="utf-8")[:200]
+    assert "Bootstrap v5.3.3" in (vendor / "bootstrap/js/bootstrap.bundle.min.js").read_text(encoding="utf-8")[:200]
+    assert "Bootstrap Icons v1.11.3" in (vendor / "bootstrap-icons/bootstrap-icons.min.css").read_text(encoding="utf-8")[:200]
+    assert 'url("fonts/bootstrap-icons.woff2' in (vendor / "bootstrap-icons/bootstrap-icons.min.css").read_text(encoding="utf-8")
     assert (vendor / "bootstrap/LICENSE").is_file() and (vendor / "bootstrap-icons/LICENSE").is_file()
 
 
 def test_app_css_classification_colours() -> None:
-    css = (STATIC_ROOT / "css/app.css").read_text()
+    css = (STATIC_ROOT / "css/app.css").read_text(encoding="utf-8")
     for cls in ("p", "lp", "vus", "lb", "b", "nc"):
         assert f".badge-class-{cls} " in css
     for severity in ("high", "medium", "low", "info"):

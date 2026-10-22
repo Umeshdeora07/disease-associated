@@ -30,8 +30,9 @@ from ge_ehr.commands import _format as F
 from ge_ehr.commands import patient_cmds
 from ge_ehr.demo import seed_demo
 from ge_ehr.extensions import db as _db
-from ge_ehr.models import Alert, AuditLog, GenomicUpload, Medication, Patient, User, utc_today
-from ge_ehr.services import patient_records
+from ge_ehr.models import Alert, AuditLog, GenomicUpload, Medication, Patient, User, utc_today, utcnow
+from ge_ehr.services import patient_records, reevaluation
+from ge_ehr.services.rules import RULES_DATA_DIR, load_rule_set_file
 from ge_ehr.services.fhir_export import validate_bundle
 from tests.conftest import build_app
 from tests.demo_fixtures import restore, seed_snapshot, seeded  # noqa: F401 - fixtures used by name
@@ -713,6 +714,37 @@ def test_history_at_reproduces_the_state_before_the_release(
     after_text = click.unstyle(after.output)
     assert "D6 v1" in after_text and "D1 v1" not in after_text
     assert "Now:            still current (active)" in after_text
+
+
+def test_history_at_shows_the_text_of_the_time(runner: FlaskCliRunner, full: Flask, db: SQLAlchemy) -> None:
+    """Finding F2: neither a therapy change nor a rule revision rewrites what --at shows."""
+    note = db.session.scalar(
+        select(Alert).where(Alert.patient_id == patient("DEMO-0002").id, Alert.rule_code == "D2", Alert.kind == "note")
+    )
+    alert = db.session.scalar(
+        select(Alert).where(Alert.patient_id == patient("DEMO-0001").id, Alert.rule_code == "D2", Alert.kind == "alert")
+    )
+    note_then, alert_then = note.message, alert.message
+    assert "already receiving a sulfonylurea" in note_then
+    t0 = utcnow()
+    for medication in patient("DEMO-0002").active_medications:
+        patient_records.stop_medication(medication)
+    rules = load_rule_set_file(RULES_DATA_DIR / "ruleset_v2.json")
+    d2 = next(rule for rule in rules["rules"] if rule["code"] == "D2")
+    d2.update(version=2, recommendation="REVISED TEXT: refer to diabetes genetics clinic.")
+    reevaluation.apply_rule_set(rules)
+    db.session.commit()
+    assert note.is_current and note.message != note_then
+
+    at = t0.isoformat(sep=" ", timespec="milliseconds")
+    then_note = " ".join(click.unstyle(run(runner, "history", "DEMO-0002", "--at", at).output).split())
+    then_alert = " ".join(click.unstyle(run(runner, "history", "DEMO-0001", "--at", at).output).split())
+    now_alert = " ".join(click.unstyle(run(runner, "history", "DEMO-0001", "--at", utcnow().isoformat(sep=" ")).output).split())
+
+    assert f"Note: {note_then}" in then_note and "no current glucose-lowering medication" not in then_note
+    assert f"Recommendation: {alert_then}" in then_alert and "REVISED TEXT" not in then_alert
+    assert "D2 v1" in then_alert and "Now: superseded" in then_alert and "(Rule revised)" in then_alert
+    assert "Recommendation: REVISED TEXT: refer to diabetes genetics clinic." in now_alert and "D2 v2" in now_alert
 
 
 def test_history_at_before_any_finding_and_date_only(runner: FlaskCliRunner, full: Flask) -> None:

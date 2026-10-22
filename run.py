@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Start GE-EHR on this computer and open it in the browser at http://127.0.0.1:5000.
+"""Start GE-EHR on this computer; then open http://127.0.0.1:5000 in a web browser.
 
     python run.py                    # waitress (production-grade, works on Windows, macOS, Linux)
     python run.py --port 8080        # another port
@@ -194,13 +194,14 @@ def main(
     except (RuntimeError, ValueError) as exc:  # invalid settings, e.g. SECRET_KEY or GE_EHR_VCF_BACKEND
         print(f"run.py: {exc}", file=sys.stderr)
         return 1
-    if os.environ.get("WERKZEUG_RUN_MAIN") != "true":  # not again in the --dev reloader's child
+    reloader_child = os.environ.get("WERKZEUG_RUN_MAIN") == "true"  # --dev: say everything only once
+    if not reloader_child:
         print("\n".join(describe(app, args.host, args.port, dev=args.dev)), flush=True)
     server = serve or (serve_with_flask if args.dev else serve_with_waitress)
     try:
         server(app, args.host, args.port, args.threads)
-    except KeyboardInterrupt:
-        print("GE-EHR stopped.")
+    except KeyboardInterrupt:  # the Flask development server; waitress returns on Ctrl+C
+        pass
     except OSError as exc:  # most often: the port is taken (EADDRINUSE / WinError 10048)
         print(
             f"run.py: cannot listen on {args.host}:{args.port} ({exc}). Is GE-EHR already running? "
@@ -208,6 +209,8 @@ def main(
             file=sys.stderr,
         )
         return 1
+    if not reloader_child:
+        print("GE-EHR stopped.")
     return 0
 
 

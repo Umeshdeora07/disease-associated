@@ -480,23 +480,46 @@ def test_mechanism_only_change_creates_an_alert_that_notifies(db: SQLAlchemy, ru
     assert (change.old_mechanism, change.new_mechanism) == ("unknown", "activating")
     assert change.category == "within_actionable"
     assert (run.alerts_created, run.alerts_confirmed, run.notifications) == (1, 1, 1)
+    # A mechanism change is a change of interpretation: the variant is amended (FHIR "amended").
     variant = variant_of(patient, V04)
-    assert (variant.reclassified_count, variant.is_amended, variant.classification_release_id) == (0, False, r2.id)
+    assert (variant.reclassified_count, variant.is_amended, variant.classification_release_id) == (1, True, r2.id)
+    assert (variant.current_classification, variant.reported_classification) == ("P", "P")
+    assert variant.last_reclassified_run_id == run.id
 
 
-def test_mechanism_loss_supersedes_silently(db: SQLAlchemy, rules_v1: None) -> None:
+@pytest.mark.parametrize(
+    ("new_mechanism", "condition_text"),
+    [("unknown", "mechanism activating → unknown"), ("inactivating", "mechanism activating → inactivating")],
+)
+@pytest.mark.parametrize("strategy", ["change_driven", "full"])
+def test_mechanism_loss_withdraws_d4_with_a_review_notice(
+    db: SQLAlchemy, rules_v1: None, strategy: str, new_mechanism: str, condition_text: str
+) -> None:
+    """A high treatment alert never disappears silently, even when the class stays P (finding F1)."""
     r1 = release("R1", {V04: ("P", "activating")})
-    r2 = release("R2", {V04: ("P", "unknown")})
+    r2 = release("R2", {V04: ("P", new_mechanism)})
     patient = carrier(V04, diabetes_type="neonatal", age_at_diagnosis_months=2)
     db.session.commit()
     reevaluation.activate_release(r1)
     d4 = current(patient)[("D4", "alert", "high")]
+    d5 = current(patient)[("D5", "alert", "low")]
 
-    run = reevaluation.activate_release(r2)
+    run = reevaluation.activate_release(r2, strategy=strategy)
 
     assert (d4.status, d4.superseded_reason) == ("superseded", "reclassified")
-    assert notices_of(patient) == [] and run.notifications == 0
-    assert findings(patient) == {("D5", "alert", "low")}
+    (notice,) = notices_of(patient)
+    assert notice.alerts == [d4] and d4.review_notice_id == notice.id
+    assert (notice.old_classification, notice.new_classification, notice.run_id) == ("P", "P", run.id)
+    assert notice.message == (
+        f"KCNJ11 variant 11-17387100-C-T (P) was reinterpreted in R2 ({condition_text}: the condition listed "
+        "for it changed); alert(s) D4 superseded. Review any treatment change made on the basis of this alert; "
+        "GE-EHR never reverses therapy automatically."
+    )
+    assert (run.review_notices, run.notifications) == (1, 1)
+    assert run.summary["categories"]["within_actionable"]["review_notices"] == 1
+    assert findings(patient) == {("D5", "alert", "low")} and d5.is_current
+    variant = variant_of(patient, V04)
+    assert (variant.reclassified_count, variant.is_amended, variant.current_classification) == (1, True, "P")
 
 
 def test_every_carrier_of_a_shared_family_variant_is_reevaluated(db: SQLAlchemy, rules_v1: None) -> None:
@@ -882,6 +905,108 @@ def test_rule_severity_change_supersedes_with_a_review_notice(
     assert d5.is_current and d5.events[-1].event == "created", "only the revised rule is re-run"
     assert (run.review_notices, run.notifications, run.alerts_created, run.alerts_superseded) == (1, 2, 1, 1)
     assert run.summary["superseded_by_reason"] == {"rule_revised": 1}
+
+
+@pytest.mark.parametrize("strategy", ["change_driven", "full"])
+def test_revised_recommendation_replaces_a_reviewed_alert_and_notifies(
+    db: SQLAlchemy, katp_patients: dict[str, Patient], strategy: str
+) -> None:
+    """Finding F4: a same-severity revision of the advice is an outcome change, never a silent rewrite."""
+    patient = katp_patients["kcnj11"]
+    old = current(patient)[("D4", "alert", "high")]
+    old.status, old.reviewed_at, old.review_comment = "reviewed", utcnow(), "Referred for sulfonylurea transfer."
+    old_text = old.message
+    db.session.commit()
+    revised_text = "Do not change therapy; refer to specialist only if HbA1c above target."
+
+    run = reevaluation.apply_rule_set(_revised("D4", recommendation=revised_text), strategy=strategy)
+
+    assert (old.status, old.superseded_reason, old.superseded_run_id) == ("superseded", "rule_revised", run.id)
+    assert (old.message, old.review_comment) == (old_text, "Referred for sulfonylurea transfer."), "never rewritten"
+    assert old.events[-1].event == "superseded" and "replaced by a new alert" in old.events[-1].detail
+    new = current(patient)[("D4", "alert", "high")]
+    assert new.id != old.id and new.message == revised_text
+    assert (new.status, new.notify, new.trigger, new.created_rule_version_id) == (
+        "active",
+        True,
+        "rule_revision",
+        _version("D4", 2).id,
+    )
+    assert f"Replaces alert #{old.id}" in new.events[0].detail
+    assert notices_of(patient) == [], "the replacement itself notifies; nothing was withdrawn"
+    assert (run.alerts_created, run.alerts_superseded, run.alerts_confirmed) == (1, 1, 0)
+    assert (run.review_notices, run.notifications) == (0, 1)
+    assert run.summary["superseded_by_reason"] == {"rule_revised": 1}
+    assert findings(patient) == {("D4", "alert", "high"), ("D5", "alert", "low")}
+
+
+def test_revised_rule_text_updates_notes_in_place(db: SQLAlchemy, rules_v1: None) -> None:
+    """Notes explain the patient's state: a revision confirms them (text snapshotted on the event)."""
+    r1 = release("R1", {V01: "P"})
+    patient = carrier(V01, drugs=["sulfonylurea"])
+    db.session.commit()
+    reevaluation.activate_release(r1)
+    note = current(patient)[("D2", "note", None)]
+    old_title = note.title
+
+    run = reevaluation.apply_rule_set(_revised("D2", title="HNF1A diabetes (revised title)"))
+
+    assert note.is_current and current(patient)[("D2", "note", None)] is note
+    assert note.title == "HNF1A diabetes (revised title)"
+    created, confirmed = note.events[0], note.events[-1]
+    assert (created.event, created.title) == ("created", old_title)
+    assert (confirmed.event, confirmed.title, confirmed.message) == ("confirmed", note.title, note.message)
+    assert (run.alerts_confirmed, run.alerts_superseded, run.notifications) == (1, 0, 0)
+
+
+def test_point_in_time_snapshot_shows_the_text_of_the_time(db: SQLAlchemy, rules_v1: None) -> None:
+    """Finding F2: the as-of view must not show text written after that moment."""
+    r1 = release("R1", {V01: "P", V06: "P"})
+    on_su = carrier(V01, drugs=["sulfonylurea"])
+    on_insulin = carrier(V06)
+    db.session.commit()
+    reevaluation.activate_release(r1)
+    db.session.commit()
+    t0 = utcnow()
+    note = current(on_su)[("D2", "note", None)]
+    old_alert = current(on_insulin)[("D2", "alert", "high")]
+    note_then, alert_then = note.message, old_alert.message
+    assert "already receiving a sulfonylurea" in note_then
+
+    (medication,) = on_su.medications
+    pr.stop_medication(medication)  # the note's text now explains "no current medication"
+    db.session.commit()
+    reevaluation.apply_rule_set(_revised("D2", recommendation="REVISED TEXT: refer to diabetes genetics clinic."))
+    db.session.commit()
+
+    assert note.is_current and note.message != note_then
+    snapshot = reevaluation.alert_snapshot_as_of(note, t0)
+    assert (snapshot.message, snapshot.title, snapshot.severity) == (note_then, note.events[0].title, None)
+    assert (snapshot.rule_version.label, snapshot.release.label, snapshot.classification) == ("D2 v1", "R1", "P")
+    assert reevaluation.alert_snapshot_as_of(note, utcnow()).message == note.message
+    then = reevaluation.alert_snapshot_as_of(old_alert, t0.replace(tzinfo=UTC))
+    assert (then.message, then.severity, then.rule_version.label) == (alert_then, "high", "D2 v1")
+    assert reevaluation.alert_snapshot_as_of(old_alert, t0 - timedelta(days=1)) is None
+    (replacement,) = [alert for alert in reevaluation.alerts_as_of(on_insulin, utcnow()) if alert.rule_code == "D2"]
+    assert reevaluation.alert_snapshot_as_of(replacement, utcnow()).message.startswith("REVISED TEXT")
+
+
+def test_snapshot_falls_back_to_the_stored_text_for_events_without_one(db: SQLAlchemy, rules_v1: None) -> None:
+    r1 = release("R1", {V01: "P"})
+    patient = carrier(V01)
+    db.session.commit()
+    reevaluation.activate_release(r1)
+    alert = current(patient)[("D2", "alert", "high")]
+    alert.events[0].title = alert.events[0].message = alert.events[0].source = alert.events[0].severity = None
+
+    snapshot = reevaluation.alert_snapshot_as_of(alert, utcnow())
+
+    assert (snapshot.title, snapshot.message, snapshot.source, snapshot.severity) == (
+        alert.title,
+        alert.message,
+        alert.source,
+        alert.severity,
+    )
 
 
 def test_rule_that_stops_firing_turns_the_alert_into_a_note(db: SQLAlchemy, rules_v1: None) -> None:

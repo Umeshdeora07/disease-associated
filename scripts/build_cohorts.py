@@ -332,7 +332,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Wrote {cohort.path} ({len(cohort.patients):,} patients, {diabetic:,} with diabetes)")
         built.append(cohort)
     readme = args.output_dir / "README.md"
-    readme.write_text(render_readme(built), encoding="utf-8")
+    readme.write_text(render_readme(built), encoding="utf-8", newline="\n")
     print(f"Wrote {readme}")
     return 0
 

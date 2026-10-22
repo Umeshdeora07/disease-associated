@@ -49,7 +49,13 @@ D2_NOTE_ON_SULFONYLUREA = (
 
 
 def variant(
-    gene: str, classification: str, key: int = 1, *, mechanism: str = "unknown", patient_variant_id: int | None = None
+    gene: str,
+    classification: str,
+    key: int = 1,
+    *,
+    mechanism: str = "unknown",
+    patient_variant_id: int | None = None,
+    zygosity: str = "heterozygous",
 ) -> ClassifiedVariant:
     return ClassifiedVariant(
         patient_variant_id=patient_variant_id if patient_variant_id is not None else key * 10,
@@ -57,7 +63,7 @@ def variant(
         gene=gene,
         classification=classification,
         mechanism=mechanism,
-        zygosity="heterozygous",
+        zygosity=zygosity,
         label=f"label-{key}",
     )
 
@@ -255,6 +261,56 @@ def test_multiple_variants_in_one_gene_give_one_finding_per_variant() -> None:
     assert [finding.classification for finding in findings] == ["P", "LP", "P", "LP", "VUS"]
 
 
+def test_homozygous_gck_in_a_neonate_gets_notes_not_dominant_advice() -> None:
+    """Finding F3: biallelic GCK loss causes permanent neonatal diabetes that needs insulin.
+
+    D1 ("review whether treatment can be stopped") and D5 ("50% risk, autosomal dominant") apply
+    to heterozygous carriers only; a homozygous carrier gets an explanatory note for each.
+    """
+    findings = evaluate(
+        [variant("GCK", "P", zygosity="homozygous")], context("insulin", age=1, diabetes_type="neonatal"), RULES_V2
+    )
+    assert summary(findings) == [("D1", 1, "note", None), ("D5", 1, "note", None)]
+    assert findings[0].message == (
+        "Rule D1 applies to heterozygous carriers; this GCK pathogenic variant is homozygous — possible "
+        "recessive/biallelic form, refer to a specialist. No alert raised."
+    )
+    assert findings[1].message.startswith("Rule D5 applies to heterozygous carriers; this GCK pathogenic variant")
+    assert all(finding.title == RULE_V2[finding.rule_code].title for finding in findings)
+
+
+@pytest.mark.parametrize("zygosity", ["homozygous", "hemizygous"])
+@pytest.mark.parametrize(("gene", "code"), [("GCK", "D1"), ("HNF1A", "D2"), ("HNF4A", "D3")])
+def test_d1_d3_and_d5_require_a_heterozygous_variant(zygosity: str, gene: str, code: str) -> None:
+    findings = evaluate([variant(gene, "LP", zygosity=zygosity)], context("insulin"), RULES_V1)
+    assert summary(findings) == [(code, 1, "note", None), ("D5", 1, "note", None)]
+    assert all(f"this {gene} likely pathogenic variant is {zygosity} —" in finding.message for finding in findings)
+
+
+def test_zygosity_note_takes_precedence_over_a_failed_therapy_condition() -> None:
+    findings = evaluate([variant("HNF1A", "P", zygosity="homozygous")], context("sulfonylurea"), [RULE_V1["D2"]])
+    assert summary(findings) == [("D2", 1, "note", None)]
+    assert findings[0].message.startswith("Rule D2 applies to heterozygous carriers")
+
+
+def test_d4_and_d6_apply_whatever_the_zygosity() -> None:
+    variants = [
+        variant("KCNJ11", "P", 1, mechanism="activating", zygosity="homozygous"),
+        variant("HNF1A", "VUS", 2, zygosity="homozygous"),
+    ]
+    findings = evaluate(variants, context("insulin", age=2, diabetes_type="neonatal"), RULES_V2)
+    assert summary(findings) == [("D4", 1, "alert", "high"), ("D5", 1, "note", None), ("D6", 2, "alert", "info")]
+
+
+def test_rule_without_zygosity_condition_matches_every_zygosity() -> None:
+    rule = RuleSpec.from_definition(rule_definition("D2", clinical=None))
+    assert rule.zygosity is None
+    for zygosity in ("heterozygous", "homozygous", "hemizygous"):
+        assert summary(evaluate([variant("HNF1A", "P", zygosity=zygosity)], context(), [rule])) == [
+            ("D2", 1, "alert", "high")
+        ]
+
+
 def test_vus_in_hnf1b_is_not_monitored_by_d6() -> None:
     assert evaluate([variant("HNF1B", "VUS")], context("insulin"), RULES_V2) == []
 
@@ -413,11 +469,11 @@ def test_describe_clinical_condition(clinical: dict[str, Any] | None, expected: 
 @pytest.mark.parametrize(
     ("rule", "expected"),
     [
-        (RULE_V1["D1"], "GCK · P/LP"),
-        (RULE_V1["D2"], "HNF1A · P/LP"),
+        (RULE_V1["D1"], "GCK · P/LP · heterozygous"),
+        (RULE_V1["D2"], "HNF1A · P/LP · heterozygous"),
         (RULE_V1["D4"], "KCNJ11 · P/LP · activating"),
         (RULE_V2["D4"], "KCNJ11 or ABCC8 · P/LP · activating"),
-        (RULE_V1["D5"], "Any of the 7 panel genes · P/LP"),
+        (RULE_V1["D5"], "Any of the 7 panel genes · P/LP · heterozygous"),
         (RULE_V1["D6"], "GCK, HNF1A or HNF4A · VUS"),
     ],
 )
@@ -475,7 +531,17 @@ def test_from_definition_optional_fields() -> None:
     del defn["genetic"]["mechanism"], defn["change_note"]
     defn["clinical"] = {"any_of_drug_classes": None}
     spec = RuleSpec.from_definition(defn)
-    assert (spec.mechanism, spec.clinical, spec.rule_version_id) == (None, None, None)
+    assert (spec.mechanism, spec.clinical, spec.rule_version_id, spec.zygosity) == (None, None, None, None)
+
+
+def test_from_definition_zygosity_condition() -> None:
+    defn = rule_definition("D5", severity="low", kind="cascade")
+    defn["genetic"]["zygosity"] = ["hemizygous", "heterozygous"]
+    spec = RuleSpec.from_definition(defn)
+    assert spec.zygosity == frozenset({"heterozygous", "hemizygous"})
+    assert describe_genetic_criterion(spec) == "HNF1A · P/LP · heterozygous or hemizygous"
+    defn["genetic"]["zygosity"] = None
+    assert RuleSpec.from_definition(defn).zygosity is None
 
 
 def _mutated(path: str, value: Any = None, *, delete: bool = False) -> dict[str, Any]:
@@ -521,7 +587,7 @@ INVALID_DEFINITIONS = [
     (_mutated("recommendation", ""), "Rule D2 v1: 'recommendation' must be a non-empty string"),
     (_mutated("source", 7), "Rule D2 v1: 'source' must be a non-empty string, got number 7."),
     (_mutated("genetic", ["HNF1A"]), "Rule D2 v1: 'genetic' must be an object, got list ['HNF1A']."),
-    (_mutated("genetic.gene", ["HNF1A"]), "Rule D2 v1: unknown field(s) in 'genetic': 'gene'; allowed: genes, classes, mechanism."),
+    (_mutated("genetic.gene", ["HNF1A"]), "Rule D2 v1: unknown field(s) in 'genetic': 'gene'; allowed: genes, classes, mechanism, zygosity."),
     (_mutated("genetic.classes", delete=True), "Rule D2 v1: missing required field(s) in 'genetic': 'classes'."),
     (_mutated("genetic.genes", []), "Rule D2 v1: 'genetic.genes' must be a non-empty list of genes, got list []."),
     (_mutated("genetic.genes", "HNF1A"), "Rule D2 v1: 'genetic.genes' must be a non-empty list of genes, got string 'HNF1A'."),
@@ -538,6 +604,22 @@ INVALID_DEFINITIONS = [
     (
         _mutated("genetic.mechanism", "gain-of-function"),
         "Rule D2 v1: 'genetic.mechanism' must be null or one of activating, inactivating, unknown; got 'gain-of-function'.",
+    ),
+    (
+        _mutated("genetic.zygosity", "heterozygous"),
+        "Rule D2 v1: 'genetic.zygosity' must be null or a non-empty list of zygosities, got string 'heterozygous'.",
+    ),
+    (
+        _mutated("genetic.zygosity", []),
+        "Rule D2 v1: 'genetic.zygosity' must be null or a non-empty list of zygosities, got list [].",
+    ),
+    (
+        _mutated("genetic.zygosity", ["het"]),
+        "Rule D2 v1: 'genetic.zygosity' contains unknown zygosity 'het'; allowed: heterozygous, homozygous, hemizygous.",
+    ),
+    (
+        _mutated("genetic.zygosity", ["homozygous", "homozygous"]),
+        "Rule D2 v1: 'genetic.zygosity' lists 'homozygous' more than once.",
     ),
     (_mutated("clinical", ["insulin"]), "Rule D2 v1: 'clinical' must be an object or null, got list ['insulin']."),
     (

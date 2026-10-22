@@ -12,15 +12,21 @@ Entry points (each logs one :class:`~ge_ehr.models.ReevaluationRun`, flushes, ne
   upgrade                   created findings ``is_reclassified``; created alerts get
                             priority ``high`` and ``notify`` unless severity ``info``;
                             superseded findings (e.g. the D6 VUS monitoring alert)
-                            reason ``reclassified``, no notice
-  downgrade                 superseded reason ``downgrade``; one ReviewNotice per
-                            (patient, variant, run) linking the superseded alerts when one
-                            of them has severity ≠ info; created findings (e.g. D6) silent
+                            reason ``reclassified``
+  downgrade                 superseded reason ``downgrade``; created findings (e.g. D6)
+                            silent
   within_actionable /       still-firing findings confirmed under the new release (no
-  within_non_actionable     notification); findings that stop applying superseded silently
-                            (reason ``reclassified``); findings that newly apply (e.g. a
+  within_non_actionable     notification); findings that stop applying superseded (reason
+                            ``reclassified``); findings that newly apply (e.g. a
                             mechanism-only change) notify as usual (§6.3)
   ========================  ==========================================================
+
+  Whatever the category, actionable advice is never withdrawn silently: one ReviewNotice per
+  (patient, variant, run) links the superseded alerts whenever one of them has severity ≠ info
+  (superseded info alerts and notes alone raise no notice). A mechanism change (e.g. the
+  condition ClinVar lists for a KCNJ11 variant changed from neonatal diabetes to
+  hyperinsulinism) is a change of interpretation even when the class stays the same: it counts
+  in the PatientVariant reclassification bookkeeping, so the FHIR export reports ``amended``.
 
   A key that is absent from the new release although the old one listed it ("removed from
   ClinVar") is not classified (NC); its category follows from the classes (LP → NC is a
@@ -32,14 +38,15 @@ Entry points (each logs one :class:`~ge_ehr.models.ReevaluationRun`, flushes, ne
 * :func:`apply_rule_set` — rule revision (§7.3): imports the rule set, then re-runs every revised
   rule for the carriers of its old and new genes (``strategy="full"``: every patient).
 * :func:`full_recompute` — reconciles every patient against the current release and rules.
-* :func:`alerts_as_of` / :func:`provenance_as_of` — point-in-time view (§7.5).
+* :func:`alerts_as_of` / :func:`provenance_as_of` / :func:`alert_snapshot_as_of` — point-in-time
+  view (§7.5).
 * :func:`release_history` — activated releases in activation order.
 
 **PatientVariant bookkeeping (§7.1).** A variant first classified against a release
 (``classification_release_id IS NULL``) gets ``reported_classification = current_classification``
-= its class and no reclassification count. Afterwards every class change increments
-``reclassified_count`` and sets ``last_reclassified_at`` / ``last_reclassified_run_id`` (FHIR
-``amended``). After an activation every PatientVariant points to the new release: unchanged keys
+= its class and no reclassification count. Afterwards every class change — and every mechanism
+change of a changed key — increments ``reclassified_count`` and sets ``last_reclassified_at`` /
+``last_reclassified_run_id`` (FHIR ``amended``). After an activation every PatientVariant points to the new release: unchanged keys
 were compared and found identical, so the new release backs their class too (one bulk UPDATE; no
 record is re-evaluated for it). :func:`full_recompute` applies the same bookkeeping, so it also
 repairs PatientVariants whose stored class had drifted from the current release.
@@ -336,15 +343,17 @@ class _Engine:
     def carriers_affected(self) -> int:
         return len(set().union(*self.carriers_by_key.values()))
 
-    def classify(self, variant: PatientVariant, new_class: str) -> None:
+    def classify(self, variant: PatientVariant, new_class: str, *, reinterpreted: bool = False) -> None:
         """PatientVariant classification bookkeeping under the run's (non-None) release (SPEC §7.1).
 
-        A variant whose class stays the same is not touched (no per-row UPDATE);
-        :func:`_point_variants_to_release` re-points those to the release in bulk.
+        ``reinterpreted``: the variant's mechanism changed, which counts as a reclassification
+        even when the class stays the same. A variant whose class and mechanism stay the same is
+        not touched (no per-row UPDATE); :func:`_point_variants_to_release` re-points those to
+        the release in bulk.
         """
         if variant.classification_release_id is None:
             variant.reported_classification = new_class  # first classification: not a reclassification
-        elif variant.current_classification == new_class:
+        elif variant.current_classification == new_class and not reinterpreted:
             return
         else:
             variant.reclassified_count = (variant.reclassified_count or 0) + 1
@@ -509,12 +518,14 @@ def _reevaluate_all_patients(
     reason_of: Callable[[int], str],
     carrier_gene: Callable[[PatientVariant], str | None],
     sync_classifications: bool,
+    reinterpreted: Callable[[int], bool] = lambda _key_id: False,
 ) -> None:
     """Full strategy: every patient, every variant classified under ``engine.release``.
 
     ``reason_of`` gives the superseded reason per variant key; ``carrier_gene`` returns the gene
     under which a variant makes its patient an affected carrier (None: not affected);
-    ``sync_classifications`` applies the PatientVariant bookkeeping to every variant.
+    ``sync_classifications`` applies the PatientVariant bookkeeping to every variant, counting
+    the keys for which ``reinterpreted`` is true as reclassified even when their class is unchanged.
     """
     patient_ids = db.session.scalars(select(Patient.id).order_by(Patient.id)).all()
     for patients in _patient_batches(patient_ids):
@@ -529,7 +540,9 @@ def _reevaluate_all_patients(
             for variant in variants_by_patient.get(patient.id, []):
                 key_class = known[variant.variant_key_id]
                 if sync_classifications:
-                    engine.classify(variant, key_class.classification)
+                    engine.classify(
+                        variant, key_class.classification, reinterpreted=reinterpreted(variant.variant_key_id)
+                    )
                 gene = carrier_gene(variant)
                 if gene is not None:
                     engine.carrier(patient.id, variant.variant_key_id, gene)
@@ -564,6 +577,11 @@ class _Change:
         return self.known.known_variant_id is None
 
     @property
+    def mechanism_changed(self) -> bool:
+        """The interpretation changed: the mechanism inferred from the listed condition differs."""
+        return self.key.old_mechanism != self.key.new_mechanism
+
+    @property
     def reason(self) -> str:
         return _REMOVED_REASON if self.removed else _CATEGORY_REASONS[self.category]
 
@@ -596,27 +614,54 @@ def _rule_codes_text(alerts: Iterable[Alert]) -> str:
     return ", ".join(sorted({alert.rule_code for alert in alerts}, key=rule_code_sort_key))
 
 
-def _downgrade_message(change: _Change, alerts: Sequence[Alert], release: KbRelease) -> str:
+def _release_notice_message(change: _Change, alerts: Sequence[Alert], release: KbRelease) -> str:
+    """What changed for the variant in ``release`` and which alerts were superseded."""
+    old, new = change.key.old_class, change.key.new_class
+    subject = f"{change.gene} variant {change.label}"
     if change.removed:
-        what = (
-            f"{change.gene} variant {change.label} ({change.key.old_class}) is no longer listed in {release.label} "
-            "and is now not classified (NC)"
-        )
+        what = f"{subject} ({old}) is no longer listed in {release.label} and is now not classified (NC)"
+    elif old != new:
+        verb = "downgraded" if change.category == "downgrade" else "reclassified"
+        what = f"{subject} was {verb} from {old} to {new} in {release.label}"
     else:
-        what = (
-            f"{change.gene} variant {change.label} was downgraded from {change.key.old_class} to "
-            f"{change.key.new_class} in {release.label}"
+        what = f"{subject} ({new}) was reinterpreted in {release.label}"
+    if change.mechanism_changed and not change.removed:
+        what += (
+            f" (mechanism {C.MECHANISM_LABELS[change.key.old_mechanism].lower()} → "
+            f"{C.MECHANISM_LABELS[change.key.new_mechanism].lower()}: the condition listed for it changed)"
         )
     return f"{what}; alert(s) {_rule_codes_text(alerts)} superseded. {_REVIEW_ADVICE}"
 
 
-def _release_semantics(engine: _Engine, changes: Mapping[int, _Change], *, initial: bool) -> _Semantics:
-    """Flags, notifications and review notices of a release activation (change-category semantics)."""
+def _withdrawn_alerts(results: Sequence[ReconcileResult]) -> defaultdict[int, list[Alert]]:
+    """Superseded alerts (not notes) per variant key, except those replaced by a revised recommendation."""
+    withdrawn: defaultdict[int, list[Alert]] = defaultdict(list)
+    for result in results:
+        revised = {id(old) for old, _new in result.revised}
+        for alert in result.superseded:
+            if alert.kind == "alert" and id(alert) not in revised:
+                withdrawn[alert.variant_key_id].append(alert)
+    return withdrawn
 
-    def apply(patient: Patient, results: Sequence[ReconcileResult], _classified: Sequence[ClassifiedVariant]) -> None:
+
+def _created_by_key(results: Sequence[ReconcileResult]) -> defaultdict[int, list[Alert]]:
+    created: defaultdict[int, list[Alert]] = defaultdict(list)
+    for result in results:
+        for alert in result.created:
+            created[alert.variant_key_id].append(alert)
+    return created
+
+
+def _release_semantics(engine: _Engine, changes: Mapping[int, _Change], *, initial: bool) -> _Semantics:
+    """Flags, notifications and review notices of a release activation (change-category semantics).
+
+    One review notice per (patient, variant) whose superseded alerts include a non-info one,
+    whatever the change category: a release never withdraws actionable advice silently.
+    """
+
+    def apply(patient: Patient, results: Sequence[ReconcileResult], classified: Sequence[ClassifiedVariant]) -> None:
         if initial:
             return  # initial classification: §6.3 defaults, nothing is a reclassification
-        downgraded: defaultdict[int, list[Alert]] = defaultdict(list)
         for result in results:
             for alert in result.created:
                 change = changes.get(alert.variant_key_id)
@@ -629,20 +674,34 @@ def _release_semantics(engine: _Engine, changes: Mapping[int, _Change], *, initi
                         alert.notify = alert.severity != "info"
                 elif change.category == "downgrade":
                     alert.notify = False
-            for alert in result.superseded:
-                change = changes.get(alert.variant_key_id)
-                if change is not None and change.category == "downgrade" and alert.kind == "alert":
-                    downgraded[alert.variant_key_id].append(alert)
-        for key_id, alerts in sorted(downgraded.items()):
-            if any(alert.severity != "info" for alert in alerts):
-                change = changes[key_id]
+        variants = {variant.variant_key_id: variant for variant in classified}
+        created = _created_by_key(results)
+        for key_id, alerts in sorted(_withdrawn_alerts(results).items()):
+            if all(alert.severity == "info" for alert in alerts):
+                continue
+            change = changes.get(key_id)
+            if change is not None:
                 engine.notice(
                     patient,
                     key_id,
                     alerts,
                     old=change.key.old_class,
                     new=change.key.new_class,
-                    message=_downgrade_message(change, alerts, engine.release),
+                    message=_release_notice_message(change, alerts, engine.release),
+                )
+            else:
+                # Full strategy only: an unchanged key whose stored state had drifted from the
+                # knowledge base (e.g. a therapy change recorded without re-evaluation).
+                variant = variants.get(key_id)
+                engine.notice(
+                    patient,
+                    key_id,
+                    alerts,
+                    old=alerts[0].classification,
+                    new=variant.classification if variant is not None else alerts[0].classification,
+                    message=_withdrawal_message(
+                        f"Re-evaluation under {engine.release.label}", alerts, created.get(key_id, []), variant
+                    ),
                 )
 
     return apply
@@ -657,7 +716,7 @@ def _reevaluate_changed_carriers(engine: _Engine, changes: Mapping[int, _Change]
             groups: defaultdict[str, set[int]] = defaultdict(set)
             for variant in carriers[patient.id]:
                 change = changes[variant.variant_key_id]
-                engine.classify(variant, change.key.new_class)
+                engine.classify(variant, change.key.new_class, reinterpreted=change.mechanism_changed)
                 engine.carrier(patient.id, variant.variant_key_id, change.gene)
                 classified.append(_classified(variant, change.known))
                 groups[change.reason].add(variant.variant_key_id)
@@ -835,6 +894,10 @@ def activate_release(
                 change = changes.get(variant.variant_key_id)
                 return change.gene if change is not None else None
 
+            def reinterpreted(key_id: int) -> bool:
+                change = changes.get(key_id)
+                return change is not None and change.mechanism_changed
+
             _reevaluate_all_patients(
                 engine,
                 trigger="clinvar_release",
@@ -842,6 +905,7 @@ def activate_release(
                 reason_of=reason_of,
                 carrier_gene=carrier_gene,
                 sync_classifications=True,
+                reinterpreted=reinterpreted,
             )
         _point_variants_to_release(engine, new_release)
         engine.counts["carriers_affected"] = engine.carriers_affected
@@ -920,20 +984,15 @@ def _withdrawal_semantics(engine: _Engine, cause: Callable[[Sequence[Alert]], st
     """One review notice per (patient, variant) whose superseded alerts include a non-info one.
 
     Used by rule revisions and full recomputations: actionable advice is never withdrawn silently.
-    Created alerts keep the §6.3 defaults (a newly firing alert notifies).
+    Created alerts keep the §6.3 defaults (a newly firing alert notifies). An alert replaced
+    because its rule revised the recommendation (same severity) raises no notice: its
+    replacement notifies.
     """
 
     def apply(patient: Patient, results: Sequence[ReconcileResult], classified: Sequence[ClassifiedVariant]) -> None:
         variants = {variant.variant_key_id: variant for variant in classified}
-        superseded: defaultdict[int, list[Alert]] = defaultdict(list)
-        created: defaultdict[int, list[Alert]] = defaultdict(list)
-        for result in results:
-            for alert in result.superseded:
-                if alert.kind == "alert":
-                    superseded[alert.variant_key_id].append(alert)
-            for alert in result.created:
-                created[alert.variant_key_id].append(alert)
-        for key_id, alerts in sorted(superseded.items()):
+        created = _created_by_key(results)
+        for key_id, alerts in sorted(_withdrawn_alerts(results).items()):
             if all(alert.severity == "info" for alert in alerts):
                 continue
             variant = variants.get(key_id)
@@ -1149,6 +1208,47 @@ def provenance_as_of(alert: Alert, at: datetime) -> AlertEvent | None:
     moment = _naive_utc(at)
     evidence = [event for event in alert.events if event.event in ("created", "confirmed") and event.at <= moment]
     return max(evidence, key=lambda event: (event.at, event.id), default=None)
+
+
+@dataclass(frozen=True)
+class AlertSnapshot:
+    """An alert or note as it stood at a point in time: its text and the evidence behind it."""
+
+    alert: Alert
+    event: AlertEvent  # the created/confirmed event in force at that time
+    title: str
+    message: str
+    source: str | None
+    severity: str | None
+    release: KbRelease | None
+    rule_version: RuleVersion | None
+    classification: str
+
+
+def alert_snapshot_as_of(alert: Alert, at: datetime) -> AlertSnapshot | None:
+    """``alert`` as shown at time ``at`` (naive UTC or aware): text, rule version, release, class.
+
+    Built from :func:`provenance_as_of`: the title, message (recommendation or note text), source
+    and severity snapshotted on that event, with its release, rule version and classification —
+    so a later rule revision or therapy change that rewrote a note's text does not alter what the
+    point-in-time view shows. Events recorded without a text snapshot fall back to the alert's
+    stored text. None when the alert did not exist yet at ``at``.
+    """
+    event = provenance_as_of(alert, at)
+    if event is None:
+        return None
+    snapshotted = event.message is not None
+    return AlertSnapshot(
+        alert=alert,
+        event=event,
+        title=event.title if snapshotted and event.title is not None else alert.title,
+        message=event.message if snapshotted else alert.message,
+        source=event.source if snapshotted else alert.source,
+        severity=event.severity if snapshotted else alert.severity,
+        release=event.release,
+        rule_version=event.rule_version,
+        classification=event.classification or alert.classification,
+    )
 
 
 def release_history() -> list[KbRelease]:

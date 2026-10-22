@@ -43,7 +43,7 @@ SUBSET_GENE_COUNTS = {"GCK": 7, "HNF1A": 3, "HNF4A": 2, "HNF1B": 1, "KCNJ11": 2,
 
 
 def fixture_lines() -> list[str]:
-    return FORMAT_FIXTURE.read_text().splitlines()
+    return FORMAT_FIXTURE.read_text(encoding="utf-8").splitlines()
 
 
 def subset_lines(path: Path) -> list[str]:
@@ -220,7 +220,7 @@ def test_undecodable_bytes_do_not_abort_the_stream(tmp_path: Path) -> None:
 )
 def test_invalid_sources_are_reported(tmp_path: Path, text: str, message: str) -> None:
     source = tmp_path / "source.vcf"
-    source.write_text(text)
+    source.write_text(text, encoding="utf-8")
     out = tmp_path / "out"
     with pytest.raises(ClinVarDownloadError, match=message.replace("(", "\\(").replace(")", "\\)").replace(".", "\\.")):
         fetch_clinvar_subset(source, out)
@@ -363,7 +363,7 @@ def test_script_source_selection(
 def test_script_default_output_dir_is_the_git_ignored_real_folder(monkeypatch: pytest.MonkeyPatch) -> None:
     script = load_fetch_script(monkeypatch)
     assert script.build_parser().parse_args([]).output_dir == REPO_ROOT / "data" / "clinvar" / "real"
-    assert "data/clinvar/real/" in (REPO_ROOT / ".gitignore").read_text()
+    assert "data/clinvar/real/" in (REPO_ROOT / ".gitignore").read_text(encoding="utf-8")
 
 
 def test_script_newer_than(

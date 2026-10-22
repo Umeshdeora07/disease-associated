@@ -235,7 +235,8 @@ def test_iter_clinvar_records_splits_multi_allelic_and_skips_unusable_alleles(tm
         "chr7\t44145200\t9900001\tc\tt,G,<DEL>,*\t.\t.\tCLNSIG=Pathogenic;GENEINFO=GCK:2645\n"
         "7\t44145300\t.\tN\tA\t.\t.\tCLNSIG=Benign\n"
         "7\t44145400\t9900003\tR\tA\t.\t.\tCLNSIG=Benign\n"
-        "7\t44145500\tnot-a-number\tA\tG\t.\t.\t.\n"
+        "7\t44145500\tnot-a-number\tA\tG\t.\t.\t.\n",
+        encoding="utf-8",
     )
     records = list(iter_clinvar_records(path))
     assert [(r.chrom, r.pos, r.ref, r.alt, r.variation_id, r.clnsig) for r in records] == [
@@ -254,7 +255,8 @@ def test_numeric_multi_value_info_fields_are_read_as_text(tmp_path: Path) -> Non
         '##INFO=<ID=ALLELEID,Number=.,Type=Integer,Description="x">\n'
         '##INFO=<ID=MC,Number=.,Type=Integer,Description="x">\n'
         "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
-        "7\t44145200\t9900001\tC\tT\t.\t.\tALLELEID=7,8;MC=1,2\n"
+        "7\t44145200\t9900001\tC\tT\t.\t.\tALLELEID=7,8;MC=1,2\n",
+        encoding="utf-8",
     )
     (record,) = iter_clinvar_records(path)
     assert (record.allele_id, record.mc) == (None, "1,2")
@@ -262,7 +264,7 @@ def test_numeric_multi_value_info_fields_are_read_as_text(tmp_path: Path) -> Non
 
 def test_iter_clinvar_records_rejects_unreadable_and_truncated_files(tmp_path: Path) -> None:
     not_vcf = tmp_path / "notes.vcf"
-    not_vcf.write_text("this is not a VCF\n")
+    not_vcf.write_text("this is not a VCF\n", encoding="utf-8")
     with pytest.raises(ValueError, match="notes.vcf could not be read as a VCF file"):
         list(iter_clinvar_records(not_vcf))
 
@@ -288,7 +290,7 @@ def test_read_vcf_header_meta(tmp_path: Path) -> None:
     }
     assert read_vcf_header_meta(DEMO_RELEASE_2)["fileDate"] == "2026-01-05"
     bare = tmp_path / "bare.vcf"
-    bare.write_text("##fileformat=VCFv4.2\n##comment\n##ge_ehr_synthetic=no\n#CHROM\tPOS\n##fileDate=2025-01-01\n")
+    bare.write_text("##fileformat=VCFv4.2\n##comment\n##ge_ehr_synthetic=no\n#CHROM\tPOS\n##fileDate=2025-01-01\n", encoding="utf-8")
     assert read_vcf_header_meta(bare) == {
         "fileformat": "VCFv4.2", "fileDate": None, "source": None, "reference": None, "ge_ehr_synthetic": False
     }
@@ -315,7 +317,7 @@ def test_write_clinvar_vcf_header_and_record_format(tmp_path: Path) -> None:
         path,
         file_date="2025-01-06",
     )
-    lines = path.read_text().splitlines()
+    lines = path.read_text(encoding="utf-8").splitlines()
     header = [line for line in lines if line.startswith("##")]
     assert header[:5] == [
         "##fileformat=VCFv4.1",
@@ -342,9 +344,9 @@ def test_write_clinvar_vcf_header_and_record_format(tmp_path: Path) -> None:
 def test_write_clinvar_vcf_without_synthetic_flag(tmp_path: Path) -> None:
     path = tmp_path / "derived.vcf"
     write_clinvar_vcf([cv("7", 44145200)], path, file_date="2025-01-06", synthetic=False)
-    header = path.read_text().splitlines()[:4]
+    header = path.read_text(encoding="utf-8").splitlines()[:4]
     assert header[2] == "##source=ClinVar"
-    assert not any(line in path.read_text() for line in C.SYNTHETIC_HEADER_LINES)
+    assert not any(line in path.read_text(encoding="utf-8") for line in C.SYNTHETIC_HEADER_LINES)
 
 
 def test_write_clinvar_vcf_sorts_by_chromosome_then_position_deterministically(tmp_path: Path) -> None:
@@ -406,7 +408,7 @@ def test_written_records_round_trip_through_the_reader(tmp_path: Path) -> None:
 def test_record_without_info_values_gets_a_dot(tmp_path: Path) -> None:
     path = tmp_path / "bare.vcf"
     write_clinvar_vcf([{"chrom": "7", "pos": 44145200, "ref": "C", "alt": "T"}], path, file_date="2025-01-06")
-    assert path.read_text().splitlines()[-1] == "7\t44145200\t.\tC\tT\t.\t.\t."
+    assert path.read_text(encoding="utf-8").splitlines()[-1] == "7\t44145200\t.\tC\tT\t.\t.\t."
 
 
 @pytest.mark.parametrize(
@@ -479,7 +481,7 @@ def test_import_release_of_a_non_synthetic_clinvar_file(db: SQLAlchemy, tmp_path
 def test_import_release_label_date_and_missing_file_date(db: SQLAlchemy, tmp_path: Path) -> None:
     path = tmp_path / "nodate.vcf"
     write_clinvar_vcf([cv("7", 44145200, clnsig="Benign")], path, file_date="2025-02-02")
-    path.write_text(path.read_text().replace("##fileDate=2025-02-02\n", ""))
+    path.write_text(path.read_text(encoding="utf-8").replace("##fileDate=2025-02-02\n", ""), encoding="utf-8")
     release = import_release(path)
     assert (release.label, release.release_date, release.file_date) == ("ClinVar nodate.vcf", None, None)
 
@@ -524,7 +526,7 @@ def test_import_release_rejects_invalid_files_before_writing(
     db: SQLAlchemy, tmp_path: Path, content: str, message: str
 ) -> None:
     path = tmp_path / "bad.vcf"
-    path.write_text(content)
+    path.write_text(content, encoding="utf-8")
     with pytest.raises(ValueError, match=message):
         import_release(path)
     assert release_count(db) == 0
